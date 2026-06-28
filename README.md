@@ -2,7 +2,7 @@
 
 **A lean, fast in-memory Active Directory graph pathfinder — the lightweight sibling to BloodHound.**
 
-No Neo4j. No JVM. No GUI. No Cypher. No kennel. Just a single Python file that ingests the exact same SharpHound output BloodHound uses and answers the questions you actually care about — *who can reach Domain Admins, what can this account touch, how do these privileges chain* — straight from the command line on your Kali box.
+No Neo4j. No JVM. No Cypher. No kennel. Just a zero-dependency Python package that ingests the exact same SharpHound output BloodHound uses and answers the questions you actually care about — *who can reach Domain Admins, what can this account touch, how do these privileges chain* — straight from the command line on your Kali box. And when you *do* want to see the graph, an optional one-command browser visualizer is built in.
 
 ```
 $ python3 whippet.py BloodHound.zip --from "JSMITH@CORP.LOCAL" --to "DOMAIN ADMINS@CORP.LOCAL" --exhaustive
@@ -38,8 +38,9 @@ Whippet stores the whole graph in plain Python adjacency lists and answers those
 
 - **Python 3.9+** — that's it. The core runs entirely on the standard library.
 - **`igraph`** *(optional)* — `pip install igraph`. When present, Whippet builds a C-backed graph mirror for bulk-analysis queries (centrality, full path matrices). For the targeted BFS queries that make up most usage, the pure-Python path is already fast enough that igraph changes nothing — so don't feel obligated to install it.
+- **`flask`** *(optional)* — only needed for the in-browser visualizer (`--serve`). `pip install "flask"` or `pip install "whippet-ad[web]"`. The CLI never imports it.
 
-No other third-party packages. Drop the file on your Kali box and run it.
+No required third-party packages. Drop the `whippet/` folder on your Kali box and run `python3 whippet.py …`.
 
 ---
 
@@ -78,6 +79,10 @@ Run with no query options and Whippet defaults to the most common question: ever
 | `--enabled-only` | With `--list-users`, restrict to enabled accounts |
 | `--max-paths N` | Cap the number of alternate paths printed (default: 20) |
 | `-o, --output FILE` | Write the report to a file (ANSI colour stripped automatically) |
+| `--serve` | Launch the optional in-browser graph visualizer instead of printing a report (needs `flask`) |
+| `--host HOST` | Interface for `--serve` (default: `127.0.0.1`) |
+| `--port PORT` | Port for `--serve` (default: `8000`) |
+| `--no-browser` | With `--serve`, don't auto-open a browser |
 
 ---
 
@@ -123,6 +128,39 @@ python3 whippet.py BloodHound.zip --list-users --user-flag hasspn --enabled-only
 ```bash
 python3 whippet.py BloodHound.zip -o paths.txt
 ```
+
+---
+
+## Browser visualizer (optional)
+
+Sometimes you really do want to *see* the graph. Whippet ships an opt-in,
+self-contained web GUI — no Neo4j, no internet, no bundled JS frameworks. It's a
+single Flask process serving a vanilla-JavaScript force-directed canvas, so it
+runs fully offline on an air-gapped box.
+
+```bash
+pip install flask          # one-time, only for the GUI
+python3 whippet.py BloodHound.zip --serve
+```
+
+That loads the graph once, starts a local server on `http://127.0.0.1:8000`, and
+opens your browser. From the sidebar you can:
+
+- **Who can reach a target** / **what a node can reach** — reverse and forward BFS, grouped by hop.
+- **Attack path A → B** — shortest path plus all simple paths, highlighted on the canvas.
+- **Transitive group members** — full nested expansion.
+- **Neighborhood** — pull up a node and its immediate edges, then **click any node to expand** outward.
+- Browse **high-value targets** and the **user listing** (with security flags) and jump straight to a node.
+
+Nodes are coloured by object type (User / Computer / Group / Domain) with
+high-value targets ringed; drag to rearrange, scroll to zoom, drag the canvas to
+pan. The GUI talks to a small JSON API (`/api/path`, `/api/reach`,
+`/api/transitive`, `/api/graph`, …) backed by the **same query engine** the CLI
+uses — so the browser and the command line can never give you different answers.
+
+The server binds to `127.0.0.1` by default (localhost only). Use `--host 0.0.0.0`
+to expose it on the network — there is no authentication, so only do that on a
+trusted segment.
 
 ---
 
@@ -172,6 +210,27 @@ _radj  : node → [(neighbor, edge_type), ...]   # reverse
 Edges are typed to match BloodHound's relationship model — `MemberOf`, `HasSession`, `GenericAll`, `WriteDacl`, `WriteOwner`, `ForceChangePassword`, `AllowedToDelegate`, `AdminTo`, `CanRDP`, `GetChanges`/`GetChangesAll`, and more. SIDs are resolved to readable names at load time, and each node is tagged with its object type (User / Computer / Group / Domain) from the source JSON.
 
 The reverse index (`_radj`) is what makes the headline query cheap. *"Who can reach this node"* becomes a single reverse BFS — `O(V + E)` — rather than a forward search repeated from every principal — `O(V × (V + E))`.
+
+### Project layout
+
+The tool is organized as a small package so each concern is testable in
+isolation, while `whippet.py` stays a drop-and-run launcher:
+
+```
+whippet.py            # thin launcher → whippet.cli:main
+whippet/
+  graph.py            # ADGraph — storage + BFS/DFS primitives
+  loader.py           # SharpHoundLoader — JSON ingestion
+  queries.py          # QueryEngine + result dataclasses (shared by CLI and GUI)
+  report.py           # TextReporter — the console report
+  cli.py              # argument parsing / entry point
+  constants.py        # edge-type and security-flag vocabularies
+  web/                # optional Flask GUI (server.py + static/ canvas frontend)
+```
+
+The key seam is **`QueryEngine`**: it runs the graph algorithms and returns plain
+result objects, which the text reporter and the web API both render. Add a query
+once in the engine and it shows up in both front-ends.
 
 **On memory:** storing edges as a flat `list[tuple]` costs roughly 60–90 bytes per edge. NetworkX, by comparison, nests edges in dicts at ~150–200 bytes each; igraph packs them into C arrays at ~30–40 bytes. For a 500K-edge graph that's the difference between ~30–40 MB and ~75–100 MB for the edge store alone — which is why Whippet doesn't reach for NetworkX, and only uses igraph for the bulk-analysis cases where C storage actually earns its keep.
 

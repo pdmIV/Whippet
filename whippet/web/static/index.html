@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Whippet — AD Graph Visualizer</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">
+      <span class="logo">🐕</span>
+      <span class="name">Whippet</span>
+      <span class="tag">AD Graph Visualizer</span>
+    </div>
+    <div id="stats" class="stats">loading…</div>
+  </header>
+
+  <div id="layout">
+    <aside id="sidebar">
+      <section class="panel">
+        <h2>Query</h2>
+
+        <label class="field">
+          <span>Type</span>
+          <select id="queryType">
+            <option value="reach-to">Who can reach a target</option>
+            <option value="reach-from">What a node can reach</option>
+            <option value="path">Attack path A → B</option>
+            <option value="transitive">Transitive group members</option>
+            <option value="neighborhood">Neighborhood of a node</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span id="primaryLabel">Target node</span>
+          <input id="primary" list="nodeOptions" autocomplete="off"
+                 placeholder="e.g. DOMAIN ADMINS@CORP.LOCAL">
+        </label>
+
+        <label class="field hidden" id="secondaryField">
+          <span>From node</span>
+          <input id="secondary" list="nodeOptions" autocomplete="off"
+                 placeholder="e.g. JSMITH@CORP.LOCAL">
+        </label>
+
+        <datalist id="nodeOptions"></datalist>
+
+        <div class="row" id="hopsRow">
+          <label class="field small">
+            <span>Hops</span>
+            <input id="hops" type="number" min="1" value="6">
+          </label>
+          <label class="check">
+            <input id="exhaustive" type="checkbox">
+            <span>Exhaustive</span>
+          </label>
+        </div>
+
+        <button id="run" class="primary">Run query</button>
+
+        <div class="quick">
+          <button data-quick="hvt" class="ghost">High-value targets</button>
+          <button data-quick="users" class="ghost">List users</button>
+          <button data-quick="reset" class="ghost">Clear graph</button>
+        </div>
+      </section>
+
+      <section class="panel" id="resultsPanel">
+        <h2>Results</h2>
+        <div id="results" class="results"><p class="muted">Run a query to see results and a graph.</p></div>
+      </section>
+
+      <section class="panel legend">
+        <h2>Legend</h2>
+        <ul>
+          <li><i class="dot user"></i> User</li>
+          <li><i class="dot computer"></i> Computer</li>
+          <li><i class="dot group"></i> Group</li>
+          <li><i class="dot domain"></i> Domain</li>
+          <li><i class="dot hvt"></i> High-value (ringed)</li>
+        </ul>
+        <p class="muted hint">Drag nodes • scroll to zoom • drag canvas to pan • click a node to expand</p>
+      </section>
+    </aside>
+
+    <main id="viewport">
+      <canvas id="graph"></canvas>
+      <div id="tooltip" class="tooltip hidden"></div>
+      <div id="overlay" class="overlay">Whippet ready — run a query.</div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
