@@ -49,11 +49,20 @@ class SharpHoundLoader:
 
     def load(self, path: str):
         p = Path(path)
+        docs: list[tuple[str, dict]] = []
         if p.suffix.lower() == ".zip":
+            docs = self._read_zip(p)
             raw = self._read_zip(p)
         elif p.is_dir():
             raw = []
             for f in sorted(p.glob("*.json")):
+                docs += self._read_file(f)
+        elif p.suffix.lower() == ".json":
+            docs = self._read_file(p)
+        self._ingest(docs)
+
+    def _read_zip(self, zp: Path) -> list[tuple[str, dict]]:
+        out = []
                 rec = self._read_file(f)
                 if rec:
                     raw.append(rec)
@@ -73,6 +82,57 @@ class SharpHoundLoader:
                 if name.endswith(".json") and not name.startswith("__MACOSX"):
                     with zf.open(name) as f:
                         try:
+                            out.append((name, json.load(f)))
+                        except json.JSONDecodeError:
+                            pass
+        return out
+
+    def _read_file(self, fp: Path) -> list[tuple[str, dict]]:
+        with open(fp, encoding="utf-8") as f:
+            try:
+                return [(fp.name, json.load(f))]
+            except json.JSONDecodeError:
+                return []
+
+    # File-name → (object type tag, edge parser). Node type "" for GPO/OU/generic.
+    def _dispatch(self, filename: str):
+        fname = filename.lower()
+        if   "user"     in fname: return "User",     self._edges_user
+        elif "computer" in fname: return "Computer", self._edges_computer
+        elif "group"    in fname: return "Group",    self._edges_group
+        elif "domain"   in fname: return "Domain",   self._edges_domain
+        elif "gpo"      in fname: return "",          self._edges_generic
+        elif "ou"       in fname: return "",          self._edges_generic
+        return None, None
+
+    def _ingest(self, docs: list[tuple[str, dict]]):
+        """
+        Two-pass ingestion. SharpHound splits objects across files with
+        cross-file references (e.g. computers.json cites group SIDs defined
+        only in groups.json). Resolving SIDs eagerly during a single pass
+        would leave any forward reference stuck as a raw SID — splitting one
+        principal into two graph nodes. So we register every node first, then
+        add edges once the SID→name table is complete.
+        """
+        parsed = []
+        for filename, data in docs:
+            node_type, edger = self._dispatch(filename)
+            if edger is None:
+                continue
+            items = data.get("data") or data.get("nodes") or []
+            parsed.append((node_type, edger, items))
+
+        # Pass 1 — register nodes (populate SID resolution table).
+        for node_type, _edger, items in parsed:
+            for item in items:
+                self._add_obj(item, node_type)
+
+        # Pass 2 — add edges, now that every SID resolves.
+        for _node_type, edger, items in parsed:
+            for item in items:
+                edger(item)
+
+    # ── Per-type parsers ──────────────────────────────────────────────────────
                             raw.append((name, json.load(f)))
                         except json.JSONDecodeError:
                             pass
@@ -130,6 +190,13 @@ class SharpHoundLoader:
         name  = props.get("name", "")
         if not name:
             return None
+        # SID location differs by format: SharpHound v2 / BloodHound CE (meta
+        # version 5/6) carries it at the top level as "ObjectIdentifier";
+        # legacy output put it in Properties.objectid. Normalize to objectid so
+        # the graph's SID→name resolution table is populated either way.
+        sid = props.get("objectid") or item.get("ObjectIdentifier", "")
+        if sid and not props.get("objectid"):
+            props = {**props, "objectid": sid}
         self.g.add_node(name, props, node_type=node_type)
         return name.upper()
 
@@ -156,6 +223,22 @@ class SharpHoundLoader:
             return self.g.resolve(sid) or name or sid
         return self.g.resolve(str(ref))
 
+    def _name_of(self, item: dict) -> str | None:
+        """Edge source: the object's own display name (registered in pass 1)."""
+        name = item.get("Properties", {}).get("name", "")
+        return name.upper() if name else None
+
+    # Well-known local group RID → BloodHound edge, for SharpHound v2's unified
+    # LocalGroups[] (replaces the legacy LocalAdmins/RemoteDesktopUsers/… arrays).
+    _LOCAL_GROUP_EDGES = {
+        "544": "AdminTo",       # Administrators
+        "555": "CanRDP",        # Remote Desktop Users
+        "562": "ExecuteDCOM",   # Distributed COM Users
+        "580": "CanPSRemote",   # Remote Management Users
+    }
+
+    def _edges_user(self, item: dict):
+        src = self._name_of(item)
     # ── Per-type edge parsers (pass 2) ─────────────────────────────────────────
 
     def _edges_user(self, item: dict):
@@ -177,6 +260,7 @@ class SharpHoundLoader:
                 self.g.add_edge(src, t, "HasSIDHistory")
 
     def _edges_computer(self, item: dict):
+        src = self._name_of(item)
         src = self._src_name(item)
         if not src:
             return
@@ -192,7 +276,7 @@ class SharpHoundLoader:
             if user:
                 self.g.add_edge(user, src, "HasSession")
 
-        # Local admin / RDP / PSRemote / DCOM
+        # Legacy (SharpHound v1) local-membership arrays.
         for rel_key, rel_type in [
             ("LocalAdmins",          "AdminTo"),
             ("RemoteDesktopUsers",   "CanRDP"),
@@ -202,6 +286,17 @@ class SharpHoundLoader:
             rel = item.get(rel_key, {})
             results = rel.get("Results", rel) if isinstance(rel, dict) else rel
             for entry in (results or []):
+                t = self._resolve_target(entry)
+                if t:
+                    self.g.add_edge(t, src, rel_type)
+
+        # SharpHound v2 unified LocalGroups[] — keyed by the local group's RID.
+        for grp in (item.get("LocalGroups") or []):
+            oid = str(grp.get("ObjectIdentifier", ""))
+            rel_type = self._LOCAL_GROUP_EDGES.get(oid.rsplit("-", 1)[-1])
+            if not rel_type:
+                continue
+            for entry in (grp.get("Results") or []):
                 t = self._resolve_target(entry)
                 if t:
                     self.g.add_edge(t, src, rel_type)
@@ -219,6 +314,7 @@ class SharpHoundLoader:
                 self.g.add_edge(t, src, "AllowedToAct")
 
     def _edges_group(self, item: dict):
+        src = self._name_of(item)
         src = self._src_name(item)
         if not src:
             return
@@ -229,6 +325,7 @@ class SharpHoundLoader:
                 self.g.add_edge(t, src, "MemberOf")
 
     def _edges_domain(self, item: dict):
+        src = self._name_of(item)
         src = self._src_name(item)
         if not src:
             return
@@ -239,6 +336,7 @@ class SharpHoundLoader:
                 self.g.add_edge(src, t, "TrustedBy")
 
     def _edges_generic(self, item: dict):
+        src = self._name_of(item)
         src = self._src_name(item)
         if not src:
             return
