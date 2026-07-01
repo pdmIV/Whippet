@@ -1,0 +1,35 @@
+{
+  "meta": { "type": "users", "count": 2, "version": 5 },
+  "data": [
+    {
+      "Properties": {
+        "name": "JSMITH@CORP.LOCAL",
+        "objectid": "S-1-5-21-1111111111-2222222222-3333333333-1001",
+        "enabled": true
+      },
+      "ObjectIdentifier": "S-1-5-21-1111111111-2222222222-3333333333-1001",
+      "Aces": [],
+      "AllowedToDelegate": [],
+      "HasSIDHistory": []
+    },
+    {
+      "Properties": {
+        "name": "SVC_SQL@CORP.LOCAL",
+        "objectid": "S-1-5-21-1111111111-2222222222-3333333333-1002",
+        "enabled": true,
+        "hasspn": true
+      },
+      "ObjectIdentifier": "S-1-5-21-1111111111-2222222222-3333333333-1002",
+      "Aces": [
+        {
+          "PrincipalSID": "S-1-5-21-1111111111-2222222222-3333333333-1001",
+          "PrincipalType": "User",
+          "RightName": "GenericAll",
+          "IsInherited": false
+        }
+      ],
+      "AllowedToDelegate": [],
+      "HasSIDHistory": []
+    }
+  ]
+}
