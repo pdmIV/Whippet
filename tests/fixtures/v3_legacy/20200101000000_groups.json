@@ -1,0 +1,20 @@
+{
+  "meta": {"count": 2, "type": "groups", "version": 3},
+  "groups": [
+    {
+      "Properties": {"name": "DOMAIN ADMINS@CONTROLLER.LOCAL", "objectid": "S-1-5-21-1-512", "highvalue": true},
+      "ObjectIdentifier": "S-1-5-21-1-512",
+      "Members": [{"MemberId": "S-1-5-21-1-1105", "MemberType": "User"}],
+      "Aces": []
+    },
+    {
+      "Properties": {"name": "IIS_IUSRS@CONTROLLER.LOCAL", "objectid": "CONTROLLER.LOCAL-S-1-5-32-568"},
+      "ObjectIdentifier": "CONTROLLER.LOCAL-S-1-5-32-568",
+      "Members": [],
+      "Aces": [
+        {"PrincipalSID": "S-1-5-21-1-1105", "PrincipalType": "User", "RightName": "Owner", "AceType": "", "IsInherited": false},
+        {"PrincipalSID": "S-1-5-21-1-1105", "PrincipalType": "User", "RightName": "GenericAll", "AceType": "", "IsInherited": false}
+      ]
+    }
+  ]
+}

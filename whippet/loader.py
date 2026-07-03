@@ -63,6 +63,29 @@ class SharpHoundLoader:
             except json.JSONDecodeError:
                 return []
 
+    @staticmethod
+    def _items_of(data: dict) -> list:
+        """
+        Locate the object array inside one SharpHound file. Modern SharpHound /
+        BloodHound CE nest it under "data" (or "nodes"); legacy meta-version-3
+        output keys it by the object-type name instead, e.g.
+        {"users": [...], "meta": {"type": "users", "version": 3}}. Fall back to
+        the first top-level list so an unrecognized wrapper still ingests.
+        """
+        if not isinstance(data, dict):
+            return []
+        items = data.get("data")
+        if items is None:
+            items = data.get("nodes")
+        if items is None:
+            meta_type = (data.get("meta") or {}).get("type")
+            if meta_type:
+                items = data.get(meta_type)
+        if items is None:
+            items = next((v for k, v in data.items()
+                          if k != "meta" and isinstance(v, list)), None)
+        return items or []
+
     # File-name → (object type tag, edge parser). Node type "" for GPO/OU/generic.
     def _dispatch(self, filename: str):
         fname = filename.lower()
@@ -88,7 +111,7 @@ class SharpHoundLoader:
             node_type, edger = self._dispatch(filename)
             if edger is None:
                 continue
-            items = data.get("data") or data.get("nodes") or []
+            items = self._items_of(data)
             parsed.append((node_type, edger, items))
 
         # Pass 1 — register nodes (populate SID resolution table).
@@ -118,9 +141,28 @@ class SharpHoundLoader:
         self.g.add_node(name, props, node_type=node_type)
         return name.upper()
 
+    # Legacy SharpHound v3 ACE vocabulary → BloodHound edge names. v3 emits
+    # "Owner"/"ExtendedRight" where modern output emits "Owns" and the resolved
+    # extended-right name; for ExtendedRight the specific right is in AceType.
+    _EXTENDED_RIGHT_EDGES = {
+        "all":                            "AllExtendedRights",
+        "user-force-change-password":     "ForceChangePassword",
+        "ds-replication-get-changes":     "GetChanges",
+        "ds-replication-get-changes-all": "GetChangesAll",
+    }
+
+    def _normalize_right(self, right: str, ace_type: str) -> str:
+        if right == "Owner":
+            return "Owns"
+        if right == "ExtendedRight":
+            return self._EXTENDED_RIGHT_EDGES.get((ace_type or "").lower(),
+                                                  "AllExtendedRights")
+        return right
+
     def _add_aces(self, src: str, aces: list):
         for ace in aces:
-            right = ace.get("RightName", "")
+            right = self._normalize_right(ace.get("RightName", ""),
+                                          ace.get("AceType", ""))
             if right not in EDGE_TYPES:
                 continue
             principal_sid = ace.get("PrincipalSID", "")
@@ -131,7 +173,9 @@ class SharpHoundLoader:
 
     def _resolve_target(self, ref) -> str:
         if isinstance(ref, dict):
-            sid  = ref.get("ObjectIdentifier", "")
+            # v3 group members / local-group entries use MemberId; sessions UserId.
+            sid  = (ref.get("ObjectIdentifier") or ref.get("MemberId")
+                    or ref.get("UserId") or "")
             name = ref.get("Name", "")
             return self.g.resolve(sid) or name or sid
         return self.g.resolve(str(ref))
@@ -179,7 +223,7 @@ class SharpHoundLoader:
         if isinstance(sessions, dict):
             sessions = sessions.get("Results", [])
         for sess in (sessions or []):
-            user_sid = sess.get("UserSID", "")
+            user_sid = sess.get("UserSID") or sess.get("UserId") or ""
             user     = self.g.resolve(user_sid) or user_sid
             if user:
                 self.g.add_edge(user, src, "HasSession")

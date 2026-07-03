@@ -17,3 +17,8 @@ env/
 # OS
 .DS_Store
 Thumbs.db
+
+# SharpHound / BloodHound captures (sensitive AD data — never commit)
+*.zip
+*_loot.zip
+!tests/fixtures/**/*.zip

@@ -1,0 +1,11 @@
+{
+  "meta": {"count": 1, "type": "domains", "version": 3},
+  "domains": [
+    {
+      "Properties": {"name": "CONTROLLER.LOCAL", "objectid": "S-1-5-21-1"},
+      "ObjectIdentifier": "S-1-5-21-1",
+      "Trusts": [],
+      "Aces": []
+    }
+  ]
+}
