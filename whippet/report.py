@@ -106,7 +106,7 @@ class TextReporter:
         add()
 
         # ── 2. Shortest path (src → dst or all → high-value) ──────────────────────
-        targets = [dst_filter.upper()] if dst_filter else [n for n in hvts if "DOMAIN ADMINS" in n]
+        targets = [dst_filter.upper()] if dst_filter else [n for n in hvts]
 
         if src_filter:
             src = src_filter.upper()
