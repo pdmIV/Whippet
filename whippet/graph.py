@@ -32,8 +32,31 @@ class ADGraph:
         _radj : dict[node_id, list[(neighbor_id, edge_type)]]  (reverse)
         _props: dict[node_id, dict]
 
-    node_id is the upper-cased name (e.g. "JSMITH@CORP.LOCAL") for readability.
-    SIDs are resolved to names at load time; unresolved SIDs are kept as-is.
+    node_id is normally the upper-cased display name (e.g. "JSMITH@CORP.LOCAL"),
+    kept as-is for readability and backward-compatible name-based lookups
+    (CLI --from/--to, reports, etc. all pass display names around as ids).
+
+    CAVEAT — name collisions: SharpHound can legitimately emit two distinct
+    objects with the identical display name, e.g. the built-in "Users" local
+    group (S-1-5-32-545) and the "CN=Users" container that holds accounts
+    like Administrator both render as "USERS@DOMAIN". BloodHound keeps these
+    separate internally by SID/GUID even though the label collides. If we
+    keyed nodes purely by name, the second object silently overwrites/merges
+    into the first node, and unrelated edge sets (e.g. group MemberOf vs.
+    container Contains) end up on the same node — producing attack "paths"
+    that don't actually exist (e.g. "member of Users group" incorrectly
+    implying "can reach whatever the Users container holds").
+
+    To fix this without breaking every name-based call site: the FIRST object
+    registered under a given display name keeps the plain name as its node_id.
+    Any SUBSEQUENT object that is provably a different real-world object (has
+    a different, already-distinct objectid) gets a disambiguated node_id of
+    "NAME [TYPE]" instead. `_props[node_id]["name"]` always holds the clean
+    display name, so anything rendering via node_name() is unaffected; only
+    the internal graph key — and therefore which edges land on which node —
+    changes. SID/GUID → node_id resolution (`resolve` / `id_for_sid`) always
+    points at the correct, disambiguated node, so loader-built edges never
+    cross-contaminate between the two objects.
 
     Memory:  ~60–90 bytes per edge (Python overhead on 64-bit).
     Compare: NetworkX stores edges in nested dicts: ~150–200 bytes per edge.
@@ -47,9 +70,10 @@ class ADGraph:
         self._adj:   dict[str, list[tuple[str, str]]] = defaultdict(list)
         self._radj:  dict[str, list[tuple[str, str]]] = defaultdict(list)
         self._props: dict[str, dict]                  = {}
-        self._sid:   dict[str, str]                   = {}   # SID  → name
-        self._name:  dict[str, str]                   = {}   # name → SID
-        self._type:  dict[str, str]                   = {}   # name → "User"/"Computer"/...
+        self._sid:   dict[str, str]                   = {}   # SID/GUID → node_id
+        self._name:  dict[str, str]                   = {}   # node_id → SID/GUID
+        self._type:  dict[str, str]                   = {}   # node_id → "User"/"Computer"/...
+        self._name_owner: dict[str, str]              = {}   # display name → SID of first claimant
 
         # Optional igraph mirror
         self._ig: "ig.Graph | None" = None
@@ -57,19 +81,33 @@ class ADGraph:
 
     # ── Mutation ───────────────────────────────────────────────────────────────
 
-    def add_node(self, name: str, props: dict, node_type: str = ""):
-        name = name.upper()
-        self._props[name] = props
-        if node_type:
-            self._type[name] = node_type
-        sid = props.get("objectid", "")
+    def add_node(self, name: str, props: dict, node_type: str = "") -> str:
+        """Register a node and return its assigned node_id (see class docstring
+        re: disambiguation when a display name collides with a different SID)."""
+        name_u = name.upper()
+        sid    = (props.get("objectid") or "").upper()
+
+        node_id = name_u
         if sid:
-            self._sid[sid.upper()] = name
-            self._name[name] = sid.upper()
+            prior_sid = self._name_owner.get(name_u)
+            if prior_sid is None:
+                self._name_owner[name_u] = sid
+            elif prior_sid != sid and sid not in self._sid:
+                # A different real object shares this display name — give it
+                # its own key instead of silently merging into the first node.
+                node_id = f"{name_u} [{node_type or 'OBJECT'}]"
+
+        self._props[node_id] = props
+        if node_type:
+            self._type[node_id] = node_type
+        if sid:
+            self._sid[sid] = node_id
+            self._name[node_id] = sid
         # Ensure node exists in adjacency lists
-        if name not in self._adj:
-            self._adj[name]  = []
-            self._radj[name] = []
+        if node_id not in self._adj:
+            self._adj[node_id]  = []
+            self._radj[node_id] = []
+        return node_id
 
     def add_edge(self, src: str, dst: str, etype: str):
         src, dst = src.upper(), dst.upper()
@@ -79,6 +117,10 @@ class ADGraph:
     def resolve(self, sid_or_name: str) -> str:
         key = sid_or_name.upper()
         return self._sid.get(key, key)
+
+    def id_for_sid(self, sid: str) -> str | None:
+        """Node_id registered for this exact SID/GUID, or None if unseen."""
+        return self._sid.get(sid.upper())
 
     def node_name(self, sid_or_name: str) -> str:
         """Return display name, preferring resolved SID."""

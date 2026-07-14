@@ -86,15 +86,16 @@ class SharpHoundLoader:
                           if k != "meta" and isinstance(v, list)), None)
         return items or []
 
-    # File-name → (object type tag, edge parser). Node type "" for GPO/OU/generic.
+    # File-name → (object type tag, edge parser).
     def _dispatch(self, filename: str):
         fname = filename.lower()
-        if   "user"     in fname: return "User",     self._edges_user
-        elif "computer" in fname: return "Computer", self._edges_computer
-        elif "group"    in fname: return "Group",    self._edges_group
-        elif "domain"   in fname: return "Domain",   self._edges_domain
-        elif "gpo"      in fname: return "",          self._edges_generic
-        elif "ou"       in fname: return "",          self._edges_generic
+        if   "user"      in fname: return "User",      self._edges_user
+        elif "computer"  in fname: return "Computer",  self._edges_computer
+        elif "group"     in fname: return "Group",     self._edges_group
+        elif "domain"    in fname: return "Domain",    self._edges_domain
+        elif "gpo"       in fname: return "GPO",       self._edges_generic
+        elif "container" in fname: return "Container", self._edges_generic
+        elif "ou"        in fname: return "OU",        self._edges_generic
         return None, None
 
     def _ingest(self, docs: list[tuple[str, dict]]):
@@ -138,8 +139,7 @@ class SharpHoundLoader:
         sid = props.get("objectid") or item.get("ObjectIdentifier", "")
         if sid and not props.get("objectid"):
             props = {**props, "objectid": sid}
-        self.g.add_node(name, props, node_type=node_type)
-        return name.upper()
+        return self.g.add_node(name, props, node_type=node_type)
 
     # Legacy SharpHound v3 ACE vocabulary → BloodHound edge names. v3 emits
     # "Owner"/"ExtendedRight" where modern output emits "Owns" and the resolved
@@ -181,9 +181,26 @@ class SharpHoundLoader:
         return self.g.resolve(str(ref))
 
     def _name_of(self, item: dict) -> str | None:
-        """Edge source: the object's own display name (registered in pass 1)."""
-        name = item.get("Properties", {}).get("name", "")
-        return name.upper() if name else None
+        """
+        Edge source: the object's own node_id, as assigned during pass 1.
+
+        Resolving via the object's SID/GUID (rather than re-uppercasing its
+        display name) matters when two distinct objects share a name — e.g.
+        the built-in "Users" group and the "CN=Users" container both render
+        as "USERS@DOMAIN". add_node() gave the second one a disambiguated id;
+        looking it up by SID here gets that same id back, so this object's
+        edges land on the right node instead of merging with the other one.
+        """
+        props = item.get("Properties", {})
+        name = props.get("name", "")
+        if not name:
+            return None
+        sid = props.get("objectid") or item.get("ObjectIdentifier", "")
+        if sid:
+            nid = self.g.id_for_sid(sid)
+            if nid:
+                return nid
+        return name.upper()
 
     # Well-known local group RID → BloodHound edge, for SharpHound v2's unified
     # LocalGroups[] (replaces the legacy LocalAdmins/RemoteDesktopUsers/… arrays).
@@ -284,9 +301,29 @@ class SharpHoundLoader:
             t = trust.get("TargetDomainName", "")
             if t:
                 self.g.add_edge(src, t, "TrustedBy")
+        self._edges_containment(src, item)
+
+    # GPLink (Links[]) and Contains (ChildObjects[]) — shared by Domain / OU /
+    # Container objects. GPOs carry neither field, so calling this on a GPO
+    # item is a harmless no-op. Without this, GPO-abuse paths (take over a
+    # GPO → it's linked to an OU/domain → that OU/domain contains a target
+    # user/computer) are invisible even though "GPLink"/"Contains" are already
+    # declared in EDGE_TYPES.
+    def _edges_containment(self, src: str, item: dict):
+        for link in item.get("Links", []) or []:
+            guid = link.get("GUID", "")
+            gpo = self.g.resolve(guid) or guid
+            if gpo:
+                # The GPO applies its settings TO the OU/domain it's linked to.
+                self.g.add_edge(gpo, src, "GPLink")
+        for child in item.get("ChildObjects", []) or []:
+            t = self._resolve_target(child)
+            if t:
+                self.g.add_edge(src, t, "Contains")
 
     def _edges_generic(self, item: dict):
         src = self._name_of(item)
         if not src:
             return
         self._add_aces(src, item.get("Aces", []))
+        self._edges_containment(src, item)

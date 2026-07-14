@@ -106,7 +106,11 @@ class TextReporter:
         add()
 
         # ── 2. Shortest path (src → dst or all → high-value) ──────────────────────
-        targets = [dst_filter.upper()] if dst_filter else [n for n in hvts]
+        # Default target set is every high-value node (mirrors BloodHound's
+        # "Shortest Paths to High Value Targets"), not just the literal Domain
+        # Admins group — DCSync targets the domain object itself, and groups
+        # like Backup Operators / Account Operators are equally critical.
+        targets = [dst_filter.upper()] if dst_filter else sorted(hvts)
 
         if src_filter:
             src = src_filter.upper()
