@@ -48,11 +48,13 @@ class ForceGraph {
 
     this.nodes = new Map();          // id -> node
     this.edges = [];                 // {source, target, etype, highlight}
+    this.edgeKeys = new Set();
     this.highlightNodes = new Set();
 
     this.scale = 1;
     this.tx = 0;
     this.ty = 0;
+    this.focusNode = null;
 
     this.hover = null;
     this.dragNode = null;
@@ -70,10 +72,13 @@ class ForceGraph {
   setData(sub, opts = {}) {
     this.nodes.clear();
     this.edges = [];
+    this.edgeKeys.clear();
     this.highlightNodes = new Set((opts.highlightNodes || []).map(s => s.toUpperCase()));
+    this.focusNode = (opts.focusNode || "").toUpperCase() || null;
     this._ingest(sub, opts);
     this._seedPositions();
-    this.fit();
+    if (opts.fit !== false) this.fit();
+    if (this.focusNode) this.centerOn(this.focusNode);
   }
 
   merge(sub) {
@@ -97,10 +102,12 @@ class ForceGraph {
         ex.high_value = ex.high_value || !!n.high_value;
       }
     });
-    const hl = new Set((opts.highlightEdges || []).map(e => e.source.toUpperCase() + "→" + e.target.toUpperCase()));
+    const hl = new Set((opts.highlightEdges || []).map(e => e.source.toUpperCase() + "→" + e.target.toUpperCase() + "|" + (e.etype || "")));
     (sub.edges || []).forEach(e => {
-      const key = e.source.toUpperCase() + "→" + e.target.toUpperCase();
+      const key = e.source.toUpperCase() + "→" + e.target.toUpperCase() + "|" + (e.etype || "");
       if (this.nodes.has(e.source) && this.nodes.has(e.target)) {
+        if (this.edgeKeys.has(key)) return;
+        this.edgeKeys.add(key);
         this.edges.push({ source: e.source, target: e.target, etype: e.etype, highlight: hl.has(key) });
       }
     });
@@ -110,11 +117,12 @@ class ForceGraph {
     // Lay nodes on a circle so the simulation starts from a spread-out state.
     const arr = [...this.nodes.values()];
     const cx = this.canvas.clientWidth / 2, cy = this.canvas.clientHeight / 2;
-    const R = Math.min(cx, cy) * 0.7 + arr.length * 2;
+    const R = Math.min(cx, cy) * 0.82 + arr.length * 6;
     arr.forEach((n, i) => {
       const a = (i / Math.max(arr.length, 1)) * Math.PI * 2;
-      n.x = cx + R * Math.cos(a);
-      n.y = cy + R * Math.sin(a);
+      const jitter = 0.15 + Math.random() * 0.2;
+      n.x = cx + R * Math.cos(a) * jitter;
+      n.y = cy + R * Math.sin(a) * jitter;
       n.vx = n.vy = 0;
     });
   }
@@ -122,7 +130,17 @@ class ForceGraph {
   clear() {
     this.nodes.clear();
     this.edges = [];
+    this.edgeKeys.clear();
     this.highlightNodes.clear();
+    this.focusNode = null;
+  }
+
+  centerOn(id) {
+    const node = this.nodes.get((id || "").toUpperCase());
+    if (!node) return;
+    const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    this.tx = w / 2 - node.x * this.scale;
+    this.ty = h / 2 - node.y * this.scale;
   }
 
   // ── simulation ──────────────────────────────────────────────────────────────
@@ -131,7 +149,8 @@ class ForceGraph {
     const n = arr.length;
     if (n === 0) return;
 
-    const REP = 7000, SPRING = 0.02, LEN = 95, GRAV = 0.008, DAMP = 0.85;
+    const density = Math.max(1, n / 40);
+    const REP = 9000 * density, SPRING = 0.018, LEN = 120 + density * 8, GRAV = 0.008, DAMP = 0.85;
     const cx = this.canvas.clientWidth / 2, cy = this.canvas.clientHeight / 2;
 
     for (let i = 0; i < n; i++) {
@@ -158,6 +177,22 @@ class ForceGraph {
       const ux = dx / d, uy = dy / d;
       a._fx += ux * f; a._fy += uy * f;
       b._fx -= ux * f; b._fy -= uy * f;
+    }
+    for (let i = 0; i < n; i++) {
+      const a = arr[i];
+      const ar = a.high_value ? 14 : 11;
+      for (let j = i + 1; j < n; j++) {
+        const b = arr[j];
+        const br = b.high_value ? 14 : 11;
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let d = Math.sqrt(dx * dx + dy * dy) || 0.01;
+        const minD = (ar + br + 10) * Math.min(2.2, 1 + density * 0.45);
+        if (d >= minD) continue;
+        const push = (minD - d) * (0.04 + density * 0.01);
+        const ux = dx / d, uy = dy / d;
+        a._fx -= ux * push; a._fy -= uy * push;
+        b._fx += ux * push; b._fy += uy * push;
+      }
     }
     for (const a of arr) {
       if (a === this.dragNode || a.fixed) { a.vx = a.vy = 0; continue; }
@@ -202,28 +237,30 @@ class ForceGraph {
   _render() {
     const ctx = this.ctx;
     const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
+    const dense = this.nodes.size > 40;
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
     ctx.save();
     ctx.scale(this.dpr, this.dpr);
 
     // edges
-    ctx.lineWidth = 1;
     for (const e of this.edges) {
       const a = this.nodes.get(e.source), b = this.nodes.get(e.target);
       if (!a || !b) continue;
+      const focused = e.highlight || this.highlightNodes.has(a.id) || this.highlightNodes.has(b.id) || a === this.hover || b === this.hover;
+      if (dense && !focused) continue;
       const [ax, ay] = this._toScreen(a.x, a.y);
       const [bx, by] = this._toScreen(b.x, b.y);
-      ctx.strokeStyle = e.highlight ? PATH_COLOR : EDGE_COLOR;
-      ctx.lineWidth = e.highlight ? 2.2 : 1;
+      ctx.strokeStyle = e.highlight ? PATH_COLOR : (dense ? "rgba(125,136,150,0.16)" : EDGE_COLOR);
+      ctx.lineWidth = e.highlight ? 2.2 : (dense ? 0.8 : 1);
       ctx.beginPath();
       ctx.moveTo(ax, ay);
       ctx.lineTo(bx, by);
       ctx.stroke();
-      this._arrow(ax, ay, bx, by, e.highlight);
+      if (!dense || e.highlight) this._arrow(ax, ay, bx, by, e.highlight);
     }
 
     // nodes
-    const showAllLabels = this.nodes.size <= 70;
+    const showAllLabels = this.nodes.size <= 18;
     for (const node of this.nodes.values()) {
       const [x, y] = this._toScreen(node.x, node.y);
       const r = (node.high_value ? 9 : 7) * Math.min(Math.max(this.scale, 0.6), 1.4);
@@ -338,6 +375,14 @@ class ForceGraph {
       this.tx = sx - wx * this.scale;
       this.ty = sy - wy * this.scale;
     }, { passive: false });
+
+    c.addEventListener("contextmenu", ev => {
+      const [sx, sy] = pos(ev);
+      const node = this._nodeAt(sx, sy);
+      if (!node) return;
+      ev.preventDefault();
+      node.fixed = !node.fixed;
+    });
   }
 
   _tooltip(node, ev) {
@@ -468,7 +513,7 @@ class App {
     const hlEdges = [];
     (data.all.paths || []).forEach(p => {
       for (let i = 1; i < p.path.length; i++)
-        hlEdges.push({ source: p.path[i - 1][0], target: p.path[i][0] });
+        hlEdges.push({ source: p.path[i - 1][0], target: p.path[i][0], etype: p.path[i][1] });
     });
     this.graph.setData(data.subgraph, {
       highlightEdges: hlEdges,
@@ -527,8 +572,18 @@ class App {
       if (replace) this._error(`Node not found: ${node}`);
       return;
     }
-    if (replace) this.graph.setData(data, { highlightNodes: [node.toUpperCase()] });
+    if (replace) this.graph.setData(data, {
+      highlightNodes: [node.toUpperCase()],
+      focusNode: node,
+      fit: false,
+    });
     else this.graph.merge(data);
+    const existing = this.el.results.querySelector(".graph-status");
+    if (existing) existing.remove();
+    if (replace && data.truncated) {
+      this.el.results.insertAdjacentHTML("afterbegin",
+        `<p class="muted graph-status">Focused view: large neighborhood trimmed around ${escapeHtml(node.toUpperCase())}. Right-click nodes to pin them.</p>`);
+    }
     this._hideOverlay();
   }
 

@@ -91,6 +91,8 @@ class SubGraph:
     """A node/edge slice ready for the visualiser to render."""
     nodes: list[dict] = field(default_factory=list)
     edges: list[dict] = field(default_factory=list)
+    truncated: bool = False
+    focus: str | None = None
 
 
 # ── Engine ─────────────────────────────────────────────────────────────────────
@@ -210,14 +212,35 @@ class QueryEngine:
             "high_value": self.g.is_high_value(name),
         }
 
+    def _priority_rank(self, name: str, focus: str, out: dict[str, int], inn: dict[str, int]) -> tuple:
+        distance = min(out.get(name, 99), inn.get(name, 99))
+        type_rank = {
+            "Domain": 0,
+            "Group": 1,
+            "Computer": 2,
+            "User": 3,
+        }.get(self.g.node_type(name), 4)
+        return (
+            distance,
+            0 if name == focus else 1,
+            0 if self.g.is_high_value(name) else 1,
+            type_rank,
+            name,
+        )
+
     def subgraph_for(self, names) -> SubGraph:
         """Induced subgraph over `names`: those nodes plus every edge between them."""
         keep = {n.upper() for n in names if self.g.has_node(n.upper())}
         nodes = [self._node_obj(n) for n in sorted(keep)]
         edges = []
+        seen_edges: set[tuple[str, str, str]] = set()
         for n in keep:
             for dst, etype in self.g.neighbors(n):
                 if dst in keep:
+                    key = (n, dst, etype)
+                    if key in seen_edges:
+                        continue
+                    seen_edges.add(key)
                     edges.append({"source": n, "target": dst, "etype": etype})
         return SubGraph(nodes, edges)
 
@@ -235,14 +258,43 @@ class QueryEngine:
             edges.append({"source": prev, "target": cur, "etype": etype})
         return SubGraph(nodes, edges)
 
-    def neighborhood(self, focus: str, hops: int = 1) -> SubGraph:
-        """BFS outward AND inward from `focus` up to `hops`; induced subgraph."""
+    def neighborhood(self, focus: str, hops: int = 1, max_nodes: int = 160) -> SubGraph:
+        """Focused neighborhood around `focus`, pruned when the slice is too dense."""
         focus = focus.upper()
         if not self.g.has_node(focus):
             return SubGraph([], [])
         out = self.g.reachable_from(focus, max_hops=hops)
         inn = self.g.can_reach(focus, max_hops=hops)
-        return self.subgraph_for(set(out) | set(inn))
+        keep = set(out) | set(inn)
+        keep.add(focus)
+
+        if len(keep) > max_nodes:
+            ordered = sorted(keep, key=lambda name: self._priority_rank(name, focus, out, inn))
+            keep = set(ordered[:max_nodes])
+            keep.add(focus)
+            nodes = [self._node_obj(n) for n in ordered[:max_nodes] if n in keep]
+            edges = []
+            seen_edges: set[tuple[str, str, str]] = set()
+            for dst, etype in self.g.neighbors(focus):
+                if dst in keep:
+                    key = (focus, dst, etype)
+                    if key in seen_edges:
+                        continue
+                    seen_edges.add(key)
+                    edges.append({"source": focus, "target": dst, "etype": etype})
+            for src, etype in self.g.neighbors(focus, reverse=True):
+                if src in keep:
+                    key = (src, focus, etype)
+                    if key in seen_edges:
+                        continue
+                    seen_edges.add(key)
+                    edges.append({"source": src, "target": focus, "etype": etype})
+            return SubGraph(nodes, edges, truncated=True, focus=focus)
+
+        # Small neighborhoods remain fully induced.
+        sub = self.subgraph_for(keep)
+        sub.focus = focus
+        return sub
 
     def search(self, prefix: str, limit: int = 20) -> list[str]:
         """Node-name autocomplete: prefix matches first, then substring matches."""
