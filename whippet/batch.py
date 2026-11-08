@@ -2,6 +2,9 @@
 import argparse
 import json
 import sys
+import time
+import uuid
+from dataclasses import asdict
 
 from .agent import AgentReporter
 from .analysis import AnalysisEngine
@@ -110,11 +113,21 @@ def request_args(request, defaults):
 def run_batch(engine, defaults, warnings=(), stream=None, output=None):
     stream, output = stream or sys.stdin, output or sys.stdout
     analysis = AnalysisEngine(engine.g)
+    session_id, request_index = uuid.uuid4().hex, 0
+    if getattr(defaults, "batch_ready", False):
+        from . import __version__
+        print(json.dumps({"schema_version": 1, "event": "ready", "protocol_version": 1,
+            "whippet_version": __version__, "session_id": session_id,
+            "stats": asdict(engine.stats()), "warnings": list(warnings),
+            "modes": sorted(MODES | {"ping", "shutdown"}), "max_request_characters": 65536}), file=output, flush=True)
     while True:
         line = stream.readline(65537)
         if not line:
             break
         request_id = None
+        started = time.perf_counter()
+        shutdown = False
+        request_index += 1
         try:
             if len(line) > 65536:
                 while not line.endswith("\n"):
@@ -123,14 +136,25 @@ def run_batch(engine, defaults, warnings=(), stream=None, output=None):
                         break
                 raise ValueError("Request exceeds 65536 characters")
             if not line.strip():
+                request_index -= 1
                 continue
             request = json.loads(line)
             if isinstance(request, dict) and type(request.get("id")) in (str, int):
                 request_id = request["id"]
-            args = request_args(request, defaults)
-            request_id = request.get("id")
-            result = AgentReporter(engine, args.limit, args.offset, analysis=analysis).report(args, warnings)
+            if isinstance(request, dict) and request.get("mode") in ("ping", "shutdown"):
+                if set(request) - {"id", "mode"} or type(request.get("id")) not in (str, int, type(None)):
+                    raise ValueError("Lifecycle requests accept only mode and a string/integer/null id")
+                shutdown = request["mode"] == "shutdown"
+                result = {"schema_version": 1, "mode": request["mode"],
+                          "result": {"status": "closing" if shutdown else "ready", "stats": asdict(engine.stats())}}
+            else:
+                args = request_args(request, defaults)
+                result = AgentReporter(engine, args.limit, args.offset, analysis=analysis).report(args, warnings)
             result["id"] = request_id
         except (ValueError, TypeError) as exc:
             result = {"schema_version": 1, "id": request_id, "error": str(exc)}
+        result["batch"] = {"session_id": session_id, "request_index": request_index,
+                           "elapsed_ms": (time.perf_counter() - started) * 1000}
         print(json.dumps(result, ensure_ascii=True, separators=(",", ":")), file=output, flush=True)
+        if shutdown:
+            break

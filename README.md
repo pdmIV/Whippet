@@ -50,6 +50,16 @@ for field semantics, prerequisites, batch requests, and remaining RSoP limits.
 
 ## HARP integration
 
+For integration in another Codex chat, start with the complete
+[HARP batch handoff](docs/HARP_BATCH_HANDOFF.md). It documents selected-Kali
+runtime ownership, readiness, process reuse, request/response IDs, event logging,
+timeouts, shutdown, all query modes, and the reusable Python client.
+
+```bash
+whippet bloodhound.zip --batch --batch-ready
+```
+
+
 Whippet now has versioned, compact JSON reports for agent use:
 
 ```bash

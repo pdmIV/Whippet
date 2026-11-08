@@ -1,5 +1,10 @@
 # Using Whippet from HARP
 
+For the complete managed-process contract and context to share with another
+Codex chat, read [HARP batch integration handoff](HARP_BATCH_HANDOFF.md).
+Whippet 0.7.0 adds optional readiness, lifecycle requests, session/timing metadata
+and a reusable client. HARP still owns runtime selection and event persistence.
+
 Whippet is a local analysis tool for collected Active Directory data. Keep it
 installed independently in Kali WSL with pipx. HARP can invoke the `whippet`
 executable through its existing terminal tool. It does not need to clone Whippet

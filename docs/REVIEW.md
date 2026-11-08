@@ -89,7 +89,7 @@ New coverage includes input ordering, sequential reloads, colliding identities,
 SID lookups, ZIP/BOM handling, malformed JSON, session direction, primary groups,
 hop boundaries, 1,200-node paths, work budgets, JSON schemas, errors, and files.
 
-Validation result: 99 checks passed, consisting of 90 unittest cases and nine
+Validation result: 107 checks passed, consisting of 98 unittest cases and nine
 existing function-style checks run through `unittest.FunctionTestCase`.
 Compilation and `git diff --check` also passed. Pytest could not be installed
 because package-index network access was unavailable.
@@ -97,3 +97,5 @@ because package-index network access was unavailable.
 NetworkX 3.7 ranked paths were tested here, including alternate ordering, parallel rights, hop limits, no-path cases and missing-dependency diagnostics. Certipy assessment import was tested on synthetic report fixtures; live Certipy execution was not performed.
 
 GPO scope and directional trust interpretation now have dedicated positive/negative tests, including explicit conditional profile isolation, receiver-side filtering, legacy trust enums, GPOChanges import, batch queries and file-to-CLI integration. No live resultant-policy or resource-authorization check was performed.
+
+Batch lifecycle/client tests run real subprocesses for process reuse, correlation, query-error recovery, event callbacks, clean shutdown, startup failure and response timeout. Runtime-side WSL process-tree cleanup and HARP event-log persistence remain HARP integration responsibilities. See [the handoff](HARP_BATCH_HANDOFF.md).
