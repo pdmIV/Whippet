@@ -23,6 +23,10 @@ except ImportError:
 #  Graph data structure
 # ══════════════════════════════════════════════════════════════════════════════
 
+class SearchLimitExceeded(RuntimeError):
+    """The bounded alternate-path search exhausted its work budget."""
+
+
 class ADGraph:
     """
     Directed, edge-typed, property-rich graph stored entirely in RAM.
@@ -74,6 +78,8 @@ class ADGraph:
         self._name:  dict[str, str]                   = {}   # node_id → SID/GUID
         self._type:  dict[str, str]                   = {}   # node_id → "User"/"Computer"/...
         self._name_owner: dict[str, str]              = {}   # display name → SID of first claimant
+        self._edge_set: set[tuple[str, str, str]] = set()
+        self._collected_evidence: dict[tuple[str, str, str], list[dict]] = {}
 
         # Optional igraph mirror
         self._ig: "ig.Graph | None" = None
@@ -85,9 +91,9 @@ class ADGraph:
         """Register a node and return its assigned node_id (see class docstring
         re: disambiguation when a display name collides with a different SID)."""
         name_u = name.upper()
-        sid    = (props.get("objectid") or "").upper()
+        sid    = (props.get("objectid") or "").strip("{}").upper()
 
-        node_id = name_u
+        node_id = self._sid.get(sid, name_u) if sid else name_u
         if sid:
             prior_sid = self._name_owner.get(name_u)
             if prior_sid is None:
@@ -95,9 +101,12 @@ class ADGraph:
             elif prior_sid != sid and sid not in self._sid:
                 # A different real object shares this display name — give it
                 # its own key instead of silently merging into the first node.
-                node_id = f"{name_u} [{node_type or 'OBJECT'}]"
+                node_id = f"{name_u} [{node_type or 'OBJECT'}]".upper()
+                if node_id in self._props:
+                    node_id = f"{name_u} [{node_type or 'OBJECT'}:{sid}]".upper()
 
         self._props[node_id] = props
+        self._ig = None
         if node_type:
             self._type[node_id] = node_type
         if sid:
@@ -110,17 +119,43 @@ class ADGraph:
         return node_id
 
     def add_edge(self, src: str, dst: str, etype: str):
-        src, dst = src.upper(), dst.upper()
+        src, dst = self.resolve(src), self.resolve(dst)
+        if not src or not dst or (src, dst, etype) in self._edge_set:
+            return
+        self._edge_set.add((src, dst, etype))
+        self._ig = None
         self._adj[src].append((dst, etype))
         self._radj[dst].append((src, etype))
+        self._adj.setdefault(dst, [])
+        self._radj.setdefault(src, [])
+
+    def reconcile_edges(self):
+        """Resolve references discovered by a later load, deduplicating edges."""
+        edges = sorted(self._edge_set)
+        self._edge_set.clear()
+        self._adj = defaultdict(list, {n: [] for n in self._props})
+        self._radj = defaultdict(list, {n: [] for n in self._props})
+        for src, dst, etype in edges:
+            self.add_edge(src, dst, etype)
+        evidence = {}
+        for (src, dst, kind), proofs in self._collected_evidence.items():
+            key = (self.resolve(src), self.resolve(dst), kind)
+            for proof in proofs:
+                if proof not in evidence.setdefault(key, []):
+                    evidence[key].append(proof)
+        self._collected_evidence = evidence
 
     def resolve(self, sid_or_name: str) -> str:
+        if sid_or_name is None:
+            return ""
+        if not isinstance(sid_or_name, str):
+            raise ValueError("Node identifier must be a string")
         key = sid_or_name.upper()
-        return self._sid.get(key, key)
+        return self._sid.get(key, self._sid.get(key.strip("{}"), key))
 
     def id_for_sid(self, sid: str) -> str | None:
         """Node_id registered for this exact SID/GUID, or None if unseen."""
-        return self._sid.get(sid.upper())
+        return self._sid.get(sid.strip("{}").upper())
 
     def node_name(self, sid_or_name: str) -> str:
         """Return display name, preferring resolved SID."""
@@ -130,26 +165,26 @@ class ADGraph:
     # ── Introspection helpers (used by the web subgraph view) ───────────────────
 
     def has_node(self, name: str) -> bool:
-        name = name.upper()
+        name = self.resolve(name)
         return name in self._props or name in self._adj
 
     def node_type(self, name: str) -> str:
         """Object type tag ("User"/"Computer"/"Group"/"Domain"/"")."""
-        return self._type.get(name.upper(), "")
+        return self._type.get(self.resolve(name), "")
 
     def is_high_value(self, name: str) -> bool:
         """Whether a node qualifies as a high-value target."""
-        name = name.upper()
+        name = self.resolve(name)
         props = self._props.get(name, {})
         pname = props.get("name", "").upper()
-        return bool(props.get("highvalue")
+        return bool(self._type.get(name) == "Domain" or props.get("highvalue")
                     or props.get("admincount")
                     or any(h in pname for h in HIGH_VALUE_NAMES))
 
     def neighbors(self, name: str, reverse: bool = False) -> list[tuple[str, str]]:
         """Outgoing (or, with reverse=True, incoming) (neighbor, edge_type) pairs."""
         adj = self._radj if reverse else self._adj
-        return adj.get(name.upper(), [])
+        return adj.get(self.resolve(name), [])
 
     # ── igraph mirror ──────────────────────────────────────────────────────────
 
@@ -182,7 +217,7 @@ class ADGraph:
 
         `reverse=True` traverses backward edges (useful for 'who can reach dst').
         """
-        src, dst = src.upper(), dst.upper()
+        src, dst = self.resolve(src), self.resolve(dst)
         adj = self._radj if reverse else self._adj
 
         if src not in adj and src not in self._props:
@@ -213,27 +248,42 @@ class ADGraph:
         return None
 
     def bfs_all_paths(
-        self, src: str, dst: str, max_depth: int = 8
+        self, src: str, dst: str, max_depth: int = 8, max_expansions: int = 100_000
     ) -> Iterator[list[tuple[str, str]]]:
         """
         DFS-based generator yielding ALL simple paths from src → dst up to
         max_depth hops.  Can be expensive — use max_depth conservatively.
         """
-        src, dst = src.upper(), dst.upper()
-
-        def _dfs(cur, path, visited, depth):
-            if depth > max_depth:
-                return
-            for nbr, etype in self._adj.get(cur, []):
-                if nbr in visited:
-                    continue
-                new_path = path + [(nbr, etype)]
-                if nbr == dst:
-                    yield new_path
-                else:
-                    yield from _dfs(nbr, new_path, visited | {nbr}, depth + 1)
-
-        yield from _dfs(src, [(src, "")], {src}, 0)
+        src, dst = self.resolve(src), self.resolve(dst)
+        if max_depth < 0:
+            raise ValueError("max_depth must be nonnegative")
+        if not self.has_node(src) or not self.has_node(dst):
+            return
+        if src == dst:
+            yield [(src, "")]
+            return
+        # Iterative DFS avoids recursion failures on deep exhaustive searches.
+        path, visited = [(src, "")], {src}
+        stack = [iter(self._adj.get(src, []))]
+        expansions = 0
+        while stack:
+            edge = next(stack[-1], None)
+            if edge is None:
+                stack.pop()
+                visited.remove(path.pop()[0])
+                continue
+            nbr, etype = edge
+            expansions += 1
+            if expansions > max_expansions:
+                raise SearchLimitExceeded("Alternate-path expansion budget reached")
+            if nbr in visited or len(path) > max_depth:
+                continue
+            if nbr == dst:
+                yield path + [(nbr, etype)]
+            elif len(path) < max_depth:
+                path.append((nbr, etype))
+                visited.add(nbr)
+                stack.append(iter(self._adj.get(nbr, [])))
 
     def reachable_from(
         self, src: str, max_hops: int = 3, edge_filter: set | None = None
@@ -242,7 +292,9 @@ class ADGraph:
         BFS outward from src.  Returns {node → distance} for all reachable
         nodes within max_hops.  Optional edge_filter restricts traversal.
         """
-        src = src.upper()
+        src = self.resolve(src)
+        if not self.has_node(src):
+            return {}
         dist   = {src: 0}
         queue  = deque([(src, 0)])
 
@@ -253,7 +305,7 @@ class ADGraph:
             for nbr, etype in self._adj.get(node, []):
                 if nbr in dist:
                     continue
-                if edge_filter and etype not in edge_filter:
+                if edge_filter is not None and etype not in edge_filter:
                     continue
                 dist[nbr] = d + 1
                 queue.append((nbr, d + 1))
@@ -266,7 +318,9 @@ class ADGraph:
         Reverse BFS: all nodes that can reach dst within max_hops.
         More efficient than running reachable_from() from every node.
         """
-        dst   = dst.upper()
+        dst   = self.resolve(dst)
+        if not self.has_node(dst):
+            return {}
         dist  = {dst: 0}
         queue = deque([(dst, 0)])
 
@@ -277,7 +331,7 @@ class ADGraph:
             for nbr, etype in self._radj.get(node, []):
                 if nbr in dist:
                     continue
-                if edge_filter and etype not in edge_filter:
+                if edge_filter is not None and etype not in edge_filter:
                     continue
                 dist[nbr] = d + 1
                 queue.append((nbr, d + 1))
@@ -289,7 +343,7 @@ class ADGraph:
         Equivalent to BloodHound's 'Transitive Object Control' query
         when traversal is limited to MemberOf edges in reverse.
         """
-        group = group.upper()
+        group = self.resolve(group)
         members: set[str] = set()
         queue  = deque([group])
         visited: set[str] = {group}
@@ -310,9 +364,7 @@ class ADGraph:
         hvt = []
         for name, props in self._props.items():
             pname = props.get("name", "").upper()
-            if (props.get("highvalue")
-                    or props.get("admincount")
-                    or any(h in pname for h in HIGH_VALUE_NAMES)):
+            if self.is_high_value(name):
                 hvt.append(name)
         return hvt
 

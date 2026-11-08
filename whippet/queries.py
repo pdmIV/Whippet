@@ -15,7 +15,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from .graph import ADGraph, IGRAPH
+from .graph import ADGraph, SearchLimitExceeded
 
 
 # ── Result objects ─────────────────────────────────────────────────────────────
@@ -49,6 +49,7 @@ class AllPathsResult:
     max_paths: int
     limit_reached: bool
     elapsed_ms: float
+    search_limited: bool = False
 
     @property
     def count(self) -> int:
@@ -107,7 +108,7 @@ class QueryEngine:
 
     @property
     def backend(self) -> str:
-        return "igraph (C)" if IGRAPH else "pure-Python BFS (dict-of-sets)"
+        return "pure-Python BFS/DFS"
 
     def stats(self) -> Stats:
         return Stats(self.backend, self.g.node_count, self.g.edge_count)
@@ -117,10 +118,14 @@ class QueryEngine:
 
     # ── Paths ────────────────────────────────────────────────────────────────────
 
-    def shortest_path(self, src: str, dst: str) -> PathResult:
-        src, dst = src.upper(), dst.upper()
+    def shortest_path(self, src: str, dst: str, *, hops: int | None = None) -> PathResult:
+        if hops is not None and hops < 0:
+            raise ValueError("hops must be nonnegative")
+        src, dst = self.g.resolve(src), self.g.resolve(dst)
         t0 = time.perf_counter()
         path = self.g.bfs_shortest_path(src, dst)
+        if path and hops is not None and len(path) - 1 > hops:
+            path = None
         ms = (time.perf_counter() - t0) * 1000
         if path:
             return PathResult(src, dst, path, len(path) - 1, True, ms)
@@ -129,7 +134,9 @@ class QueryEngine:
     def all_paths(
         self, src: str, dst: str, *, hops: int, exhaustive: bool, max_paths: int
     ) -> AllPathsResult:
-        src, dst = src.upper(), dst.upper()
+        if hops < 0 or max_paths < 1:
+            raise ValueError("hops must be nonnegative and max_paths must be positive")
+        src, dst = self.g.resolve(src), self.g.resolve(dst)
         # For all-simple-paths, the exhaustive depth is the reachable-set size
         # minus one: a simple path can't revisit a node, so it can't be longer.
         if exhaustive:
@@ -142,23 +149,29 @@ class QueryEngine:
         t0 = time.perf_counter()
         paths: list[PathResult] = []
         limit_reached = False
-        for raw in self.g.bfs_all_paths(src, dst, max_depth=depth):
-            paths.append(PathResult(src, dst, raw, len(raw) - 1, True, 0.0))
-            if len(paths) >= max_paths:
-                limit_reached = True
-                break
+        search_limited = False
+        try:
+            for raw in self.g.bfs_all_paths(src, dst, max_depth=depth):
+                if len(paths) == max_paths:
+                    limit_reached = True
+                    break
+                paths.append(PathResult(src, dst, raw, len(raw) - 1, True, 0.0))
+        except SearchLimitExceeded:
+            search_limited = True
         ms = (time.perf_counter() - t0) * 1000
         return AllPathsResult(
             src, dst, paths, depth, depth_label, exhaustive, max_paths,
-            limit_reached, ms,
+            limit_reached, ms, search_limited,
         )
 
     # ── Reachability ─────────────────────────────────────────────────────────────
 
     def _effective_hops(self, hops: int, exhaustive: bool) -> int:
+        if hops < 0:
+            raise ValueError("hops must be nonnegative")
         # Reachability BFS terminates when the frontier empties, so the
         # exhaustive bound is simply "more than the graph can ever traverse".
-        return self.g.node_count if exhaustive else hops
+        return len(self.g._adj) if exhaustive else hops
 
     def _group_by_distance(self, dist: dict[str, int], root: str) -> tuple[dict[int, list[str]], int]:
         by_distance: dict[int, list[str]] = {}
@@ -173,7 +186,7 @@ class QueryEngine:
         return by_distance, total
 
     def who_can_reach(self, dst: str, *, hops: int, exhaustive: bool) -> ReachResult:
-        dst = dst.upper()
+        dst = self.g.resolve(dst)
         eff = self._effective_hops(hops, exhaustive)
         t0 = time.perf_counter()
         dist = self.g.can_reach(dst, max_hops=eff)
@@ -182,7 +195,7 @@ class QueryEngine:
         return ReachResult(dst, "to", by_distance, total, exhaustive, hops, ms)
 
     def reachable(self, src: str, *, hops: int, exhaustive: bool) -> ReachResult:
-        src = src.upper()
+        src = self.g.resolve(src)
         eff = self._effective_hops(hops, exhaustive)
         t0 = time.perf_counter()
         dist = self.g.reachable_from(src, max_hops=eff)
@@ -193,7 +206,7 @@ class QueryEngine:
     # ── Membership / users ───────────────────────────────────────────────────────
 
     def transitive(self, group: str) -> MembersResult:
-        group = group.upper()
+        group = self.g.resolve(group)
         t0 = time.perf_counter()
         members = self.g.transitive_members(group)
         ms = (time.perf_counter() - t0) * 1000

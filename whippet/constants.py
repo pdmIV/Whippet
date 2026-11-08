@@ -10,21 +10,24 @@ from __future__ import annotations
 # ── Edge types that represent a privilege / control relationship ───────────────
 #    (matches BloodHound's relationship model)
 EDGE_TYPES = {
+    "Enroll", "ManageCA", "ManageCertificates", "WritePKIEnrollmentFlag", "WritePKINameFlag",
     # Group / session
     "MemberOf", "HasSession",
     # ACL-based
     "GenericAll", "GenericWrite", "WriteOwner", "WriteDacl",
     "AllExtendedRights", "ForceChangePassword", "AddMember", "Owns",
+    "AddSelf", "AddAllowedToAct", "AddKeyCredentialLink", "WriteSPN",
+    "WriteAccountRestrictions",
     "ReadLAPSPassword", "ReadGMSAPassword",
-    "GetChanges", "GetChangesAll",
+    "GetChanges", "GetChangesAll", "GetChangesInFilteredSet",
     # Delegation
     "AllowedToDelegate", "AllowedToAct",
     # GPO / OU
-    "GPLink", "Contains", "AffectedBy",
+    "GPLink", "Contains", "AffectedBy", "WriteGPLink",
     # Trust / special
     "DCSync", "AdminTo", "CanRDP", "CanPSRemote", "ExecuteDCOM",
     # BloodHound CE extras
-    "HasSIDHistory", "TrustedBy",
+    "HasSIDHistory", "TrustedBy", "CanAuthenticateTo",
 }
 
 HIGH_VALUE_NAMES = {

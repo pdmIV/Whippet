@@ -532,6 +532,7 @@ class App {
       html += `<div class="path">[${i + 1}] (${p.hops} hops)<br>${fmtPath(p.path)}</div>`;
     });
     if (all.limit_reached) html += `<p class="muted">… limit ${all.max_paths} reached</p>`;
+    if (all.search_limited) html += `<p class="muted">Search budget reached. Results are incomplete.</p>`;
     this._setResults(html);
   }
 

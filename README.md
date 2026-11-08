@@ -15,6 +15,63 @@ $ python3 whippet.py BloodHound.zip --from "JSMITH@CORP.LOCAL" --to "DOMAIN ADMI
 
 ---
 
+## HTB lab workflow
+
+See the [HTB CLI guide](docs/HTB.md) for account triage, group-derived ACL leads,
+LAPS/gMSA and delegation findings, routes from multiple owned accounts, Certipy
+JSON import, and NetworkX ranked alternative paths.
+
+```bash
+whippet bloodhound.zip --triage 'USER@LAB.HTB' --limit 5
+whippet bloodhound.zip certipy_find.json --findings adcs
+whippet bloodhound.zip --from 'USER@LAB.HTB' --to 'DOMAIN ADMINS@LAB.HTB' --k-shortest 5
+```
+
+Ranked paths require the optional `analysis` extra (`networkx`). Whippet reuses
+Certipy assessments rather than recreating its ESC rules. This supports common
+lab investigation workflows but does not establish complete BloodHound parity.
+
+## GPOs and trusts
+
+Whippet interprets GPO scope with inheritance blocks, enforced links and disabled
+sections, imports collector-computed GPO access rights, and reports directional
+trust authentication flows and receiver-side filtering conditions.
+
+```bash
+whippet bloodhound.zip --gpo-scope 'POLICY@LAB.HTB'
+whippet bloodhound.zip --trust-path 'CHILD.LAB.HTB' 'LAB.HTB'
+whippet bloodhound.zip --format json --from 'USER@LAB.HTB' --to 'PC.LAB.HTB' --profile potential
+```
+
+The opt-in `potential` profile adds conditional policy and same-forest
+SID-history steps with evidence. Default supported routes keep these separate
+from ordinary collected privilege edges. See the [GPO and trust guide](docs/POLICY_TRUST.md)
+for field semantics, prerequisites, batch requests, and remaining RSoP limits.
+
+## HARP integration
+
+Whippet now has versioned, compact JSON reports for agent use:
+
+```bash
+whippet bloodhound.zip --summary --from 'JSMITH@CORP.LOCAL' --limit 10
+whippet bloodhound.zip --search 'svc'
+whippet bloodhound.zip --node 'SVC_SQL@CORP.LOCAL'
+whippet bloodhound.zip --findings dcsync
+whippet bloodhound.zip --objects computer --where enabled=true --select name operatingsystem
+whippet bloodhound.zip --batch
+```
+
+Summaries use a single BFS to find candidate routes and include totals and
+truncation markers. JSON path queries avoid alternate-path enumeration unless
+`--all-paths` is requested. See the [HARP integration guide](docs/HARP.md) for the
+output contract, workflow, and Python API, and the [correctness review](docs/REVIEW.md)
+for fixed bugs and remaining limitations. Graph paths are leads that require
+verification. Supported JSON routes now compose DCSync rights across nested
+memberships and retain supporting evidence. Findings queries, exact property
+filters, pagination, and load-once JSON requests reduce what HARP needs to ingest.
+See the [CLI parity matrix](docs/PARITY.md). Whippet does not yet implement all
+BloodHound post-processing.
+
 ## Why
 
 BloodHound is excellent, but for a lot of day-to-day work it is heavier than the problem requires. Standing up Neo4j, importing the data, opening the GUI, and clicking through *Shortest Paths to Domain Admins* is a lot of ceremony when all you want is a fast, scriptable answer you can pipe into a report.
@@ -23,21 +80,18 @@ Even a large enterprise AD is typically tens of thousands of nodes and a few hun
 
 Whippet stores the whole graph in plain Python adjacency lists and answers those queries with BFS/DFS. No server to manage, no import step, and queries return in milliseconds.
 
-| | BloodHound + Neo4j | Whippet |
-|---|---|---|
-| Setup | Install Neo4j, import data, open GUI | `python3 whippet.py file.zip` |
-| Import (~30K nodes) | 30–120 s | 1–2 s (load + index) |
-| Shortest-path query | 20–200 ms (Cypher) | < 1 ms |
-| "All paths to DA" | 2–10 s (GUI) | 20–80 ms |
-| Dependencies | JVM, Neo4j, browser | Python 3 stdlib (igraph optional) |
-| Scriptable / pipeable | Awkward | Native |
+Whippet's targeted queries use Python BFS/DFS. No comparative timing claims
+are made here without a reproducible benchmark. Import time and memory use
+depend on the capture, and enumerating alternate paths can be expensive.
 
 ---
 
 ## Requirements
 
 - **Python 3.9+** — that's it. The core runs entirely on the standard library.
-- **`igraph`** *(optional)* — `pip install igraph`. When present, Whippet builds a C-backed graph mirror for bulk-analysis queries (centrality, full path matrices). For the targeted BFS queries that make up most usage, the pure-Python path is already fast enough that igraph changes nothing — so don't feel obligated to install it.
+- **`igraph`** *(optional)* - a graph mirror is available through the Python API.
+  Current CLI and GUI queries use Python BFS/DFS. Installing igraph does not
+  accelerate these queries, and the CLI does not build an unused mirror.
 - **`flask`** *(optional)* — only needed for the in-browser visualizer (`--serve`). `pip install "flask"` or `pip install "whippet-ad[web]"`. The CLI never imports it.
 
 No required third-party packages. Drop the `whippet/` folder on your Kali box and run `python3 whippet.py …`.
@@ -62,14 +116,20 @@ Both SharpHound v1 and v2 (BloodHound CE) output formats are supported. For full
 python3 whippet.py INPUT [INPUT ...] [options]
 ```
 
-Run with no query options and Whippet defaults to the most common question: every principal that can reach **Domain Admins**, plus a high-value-target inventory.
+Run with no query options for raw reachability to each detected high-value target, plus a target inventory.
 
 ### Options
 
 | Option | Description |
 |---|---|
+| `--format json` | Versioned JSON with bounded collections |
+| `--summary` | Compact JSON inventory and routes from a known principal |
+| `--node NODE` | JSON object properties and incoming/outgoing relationships |
+| `--search TEXT` | JSON name discovery with truncation marker |
+| `--limit N` | Rows per JSON collection, default 20 |
+| `--all-paths` | Opt into alternate paths for JSON source/target queries |
 | `--from SRC` | Source node (user / computer / group name or SID) |
-| `--to DST` | Target node (defaults to the Domain Admins group if omitted) |
+| `--to DST` | Target node (all detected high-value targets if omitted) |
 | `--reachable NODE` | Show everything reachable **from** this node |
 | `--transitive-members GROUP` | Fully expand nested group membership |
 | `--hops N` | Maximum path depth (default: 6). Ignored when `--exhaustive` is set |
@@ -187,14 +247,17 @@ trusted segment.
 
 Recognized flags: `enabled`, `adminCount`, `kerberoastable` (SPN set), `asrep-roastable` (no pre-auth), `pwdNotReqd`, `pwdNeverExpires`, `unconstrained` / `constrained` delegation, `sensitive`, and `sidHistory`. Filter with `--user-flag` (AND semantics) and `--enabled-only`.
 
-### Exhaustive search without overshoot
+### Exhaustive search and work limits
 
-`--exhaustive` replaces a hand-picked `--hops` value with a bound computed from the graph itself — and the bound is exact, not a guess:
+`--exhaustive` removes the manual hop cap. Reachability uses BFS until its
+frontier empties. Alternate-path DFS uses the reachable-set size minus one as
+a safe upper bound on path length. This bound need not be the longest actual
+simple path.
 
-- **Reachability** (`--reachable`, "who can reach") is plain BFS, which terminates naturally when the frontier empties. There is no benefit to a hop cap; a limit could only ever cut off valid results. Exhaustive here simply means *no cap*.
-- **All simple paths** is the only query with a real depth question, and computing the true longest simple path is NP-hard. But there's a tight, cheap upper bound: a simple path can't revisit a node, so it can never be longer than the number of nodes reachable from the source. Whippet computes that reachable-set size per source and uses it as the DFS depth — guaranteeing no real path is truncated, without doing unnecessary work.
-
-One honest caveat: the *count* of simple paths can still grow combinatorially in a dense graph even when the depth bound is correct. That's inherent to enumerating all paths, not something a hop cap fixes. `--max-paths` (default 20) keeps output responsive; raise it if you want more.
+Alternate paths are capped by `--max-paths` and a 100,000 edge-expansion budget.
+The text report, GUI, and JSON indicate when that work budget is exhausted.
+`--exhaustive` does not override either cap. A result can therefore be incomplete
+even with no manual hop limit.
 
 ---
 
@@ -207,7 +270,7 @@ _adj   : node → [(neighbor, edge_type), ...]   # forward
 _radj  : node → [(neighbor, edge_type), ...]   # reverse
 ```
 
-Edges are typed to match BloodHound's relationship model — `MemberOf`, `HasSession`, `GenericAll`, `WriteDacl`, `WriteOwner`, `ForceChangePassword`, `AllowedToDelegate`, `AdminTo`, `CanRDP`, `GetChanges`/`GetChangesAll`, and more. SIDs are resolved to readable names at load time, and each node is tagged with its object type (User / Computer / Group / Domain) from the source JSON.
+Edges are typed to match BloodHound's relationship model — `MemberOf`, `HasSession`, `GenericAll`, `WriteDacl`, `WriteOwner`, `ForceChangePassword`, `AllowedToDelegate`, `AdminTo`, `CanRDP`, `GetChanges`/`GetChangesAll`, and more. SIDs are resolved to readable names at load time, and each node is tagged with its object type (User / Computer / Group / Domain) from collector metadata, with a filename fallback.
 
 The reverse index (`_radj`) is what makes the headline query cheap. *"Who can reach this node"* becomes a single reverse BFS — `O(V + E)` — rather than a forward search repeated from every principal — `O(V × (V + E))`.
 
@@ -232,7 +295,10 @@ The key seam is **`QueryEngine`**: it runs the graph algorithms and returns plai
 result objects, which the text reporter and the web API both render. Add a query
 once in the engine and it shows up in both front-ends.
 
-**On memory:** storing edges as a flat `list[tuple]` costs roughly 60–90 bytes per edge. NetworkX, by comparison, nests edges in dicts at ~150–200 bytes each; igraph packs them into C arrays at ~30–40 bytes. For a 500K-edge graph that's the difference between ~30–40 MB and ~75–100 MB for the edge store alone — which is why Whippet doesn't reach for NetworkX, and only uses igraph for the bulk-analysis cases where C storage actually earns its keep.
+**On memory:** the graph keeps forward and reverse adjacency lists, properties,
+identity indexes, and a set of unique typed edges. Memory varies with object and
+property sizes. Measure the full process on representative data rather than
+assuming a fixed per-edge size.
 
 ---
 

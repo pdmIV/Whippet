@@ -116,7 +116,7 @@ class TextReporter:
             src = src_filter.upper()
             for dst in targets:
                 h2(f"Shortest Path: {src} → {dst}")
-                r = eng.shortest_path(src, dst)
+                r = eng.shortest_path(src, dst, hops=None if exhaustive else hops)
                 if r.found:
                     add(f"  ({r.hops} hop{'s' if r.hops != 1 else ''}, {r.elapsed_ms:.1f} ms)")
                     add(f"  {fmt_path(r.path)}")
@@ -151,6 +151,8 @@ class TextReporter:
                 add(f"       {fmt_path(p.path)}")
             if r.limit_reached:
                 add(f"  ... (limit {max_paths} reached)")
+            if r.search_limited:
+                add("  ... (search budget reached; results are incomplete)")
             if r.count == 0:
                 add("  No paths found.")
             add(f"  ({r.elapsed_ms:.1f} ms)")

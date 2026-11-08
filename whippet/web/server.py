@@ -78,7 +78,7 @@ def create_app(engine: QueryEngine) -> Flask:
         hops = _int_arg("hops", 6)
         max_paths = _int_arg("max_paths", 20)
 
-        shortest = engine.shortest_path(src, dst)
+        shortest = engine.shortest_path(src, dst, hops=None if exhaustive else hops)
         allp = engine.all_paths(src, dst, hops=hops, exhaustive=exhaustive, max_paths=max_paths)
 
         # Build a subgraph from the union of all discovered path nodes.

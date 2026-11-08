@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "whippet-ad"
-version = "0.2.0"
+version = "0.6.0"
 description = "A lean, fast in-memory Active Directory graph pathfinder — the lightweight sibling to BloodHound."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,6 +19,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
+analysis = ["networkx>=3.2,<4"]
 # Optional fast C-backed graph mirror for bulk-analysis queries.
 fast = ["igraph>=0.10"]
 # Optional in-browser visualizer / GUI (`whippet ... --serve`).
