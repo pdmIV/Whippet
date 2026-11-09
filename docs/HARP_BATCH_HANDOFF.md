@@ -215,3 +215,6 @@ a distribution. Host-launcher termination is not a cross-runtime cleanup guarant
 Whippet tests exercise a real subprocess for reuse, projection, error recovery,
 callback correlation, shutdown and timeouts. They do not establish a completed
 HARP integration or a live Kali/WSL process-tree cleanup test.
+
+
+For Whippet 0.8 lead states, empty-route diagnostics, the `handoff` mode and the trusted-host overlay boundary, see [AD assessment handoffs](AD_ASSESSMENT_HANDOFF.md). The older HARP allowlist requires a separate HARP update before it can dispatch this new mode.

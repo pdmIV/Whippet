@@ -7,7 +7,7 @@ from .queries import QueryEngine
 
 
 from .analysis import AnalysisEngine, CONTEXT_EDGES
-from .lab import routes, explain
+from .lab import routes, explain, handoff, route_diagnostic
 
 
 class AgentReporter:
@@ -88,7 +88,9 @@ class AgentReporter:
         if args.profile in ("supported", "potential") and (args.reachable or (args.dst and not args.summary)):
             eng = QueryEngine(self.analysis.route_graph(args.profile))
         route_profile = "potential" if args.profile == "potential" else "supported"
-        if args.gpo_scope:
+        if args.handoff:
+            mode, result = "handoff", handoff(self.analysis, args.handoff, args.lead_query, args.lead_index)
+        elif args.gpo_scope:
             mode, result = "gpo-scope", {"gpo": self.require_node(args.gpo_scope),
                 **self.bounded(self.analysis.policy.impacts(args.gpo_scope))}
         elif args.trust_path:
@@ -98,10 +100,14 @@ class AgentReporter:
             grouped = {}
             for row in self.analysis.findings(principal=principal):
                 grouped.setdefault(row["query"], []).append(row)
+            triage_routes = routes(self.analysis, [principal], hops=eng._effective_hops(args.hops, args.exhaustive), profile=route_profile)
+            self.analysis.triage_context[principal] = {"finding_counts": {k: len(v) for k, v in grouped.items()},
+                "route_total": len(triage_routes),
+                "follow_up": {"mode": "triage", "node": principal, "limit": args.limit}}
             mode, result = "triage", {"principal": principal,
                 "memberships": self.bounded(self.analysis.memberships(principal)),
                 "findings": {key: self.bounded(rows) for key, rows in sorted(grouped.items())},
-                "routes": self.bounded(routes(self.analysis, [principal], hops=eng._effective_hops(args.hops, args.exhaustive), profile=route_profile)),
+                "routes": self.bounded(triage_routes),
                 "coverage": {key: self.analysis.coverage()[key] for key in
                     ("profile", "full_bloodhound_parity", "unsupported_analysis")}}
         elif args.routes:
@@ -171,6 +177,19 @@ class AgentReporter:
         else:
             mode, result = "summary", self.summary(args.src, args.dst,
                             eng._effective_hops(args.hops, args.exhaustive), profile=route_profile)
+        if mode == "routes" and not result["total"]:
+            result["route_diagnostic"] = route_diagnostic(self.analysis, [self.require_node(n) for n in args.owned],
+                self.require_node(args.dst) if args.dst else None, args.hops, route_profile, False, args.avoid)
+        if mode == "path" and not result["found"]:
+            result["route_diagnostic"] = route_diagnostic(self.analysis, [result["src"]], result["dst"],
+                None if args.exhaustive else args.hops, args.profile, False)
+        if mode == "ranked-paths" and not result["items"]:
+            result["route_diagnostic"] = route_diagnostic(self.analysis, [result["source"]], result["target"],
+                args.hops, route_profile, False)
+        if mode in ("triage", "summary") and result.get("routes", {}).get("total") == 0:
+            principal = result.get("principal") or result.get("source")
+            result["route_diagnostic"] = route_diagnostic(self.analysis, [principal] if principal else [],
+                self.require_node(args.dst) if args.dst else None, args.hops, route_profile, False)
         return {"schema_version": 1, "mode": mode, "stats": asdict(self.engine.stats()),
                 "path_profile": route_profile if mode in ("summary", "triage", "routes", "ranked-paths") else args.profile,
                 "warnings": list(warnings),

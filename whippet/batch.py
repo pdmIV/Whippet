@@ -10,10 +10,10 @@ from .agent import AgentReporter
 from .analysis import AnalysisEngine
 
 
-MODES = {"summary", "node", "search", "findings", "memberships", "path",
+MODES = {"handoff", "summary", "node", "search", "findings", "memberships", "path",
          "reachable", "members", "users", "catalog", "objects", "triage", "routes", "explain", "ranked-paths", "gpo-scope", "trust-path"}
 FIELDS = {"id", "mode", "node", "source", "target", "query", "principal",
-          "hops", "limit", "offset", "profile", "object_type", "where", "select", "sources", "avoid", "edge", "count"}
+          "hops", "limit", "offset", "profile", "object_type", "where", "select", "sources", "avoid", "edge", "count", "lead_index"}
 
 
 def request_args(request, defaults):
@@ -27,7 +27,7 @@ def request_args(request, defaults):
     args = argparse.Namespace(**vars(defaults))
     for key in ("summary", "node", "search", "findings", "memberships", "reachable",
                 "transitive_members", "list_users", "catalog", "objects", "src", "dst", "principal",
-                "triage", "routes", "explain", "k_shortest", "gpo_scope", "trust_path"):
+                "triage", "routes", "explain", "k_shortest", "gpo_scope", "trust_path", "handoff"):
         setattr(args, key, None)
     args.all_paths, args.exhaustive = False, False
     if mode != "objects" and set(request) & {"object_type", "where", "select"}:
@@ -38,6 +38,8 @@ def request_args(request, defaults):
         raise ValueError("edge requires mode explain")
     if mode != "ranked-paths" and "count" in request:
         raise ValueError("count requires mode ranked-paths")
+    if mode != "handoff" and "lead_index" in request:
+        raise ValueError("lead_index requires mode handoff")
     for key, default, minimum in (("hops", defaults.hops, 0), ("limit", defaults.limit, 1),
                                   ("offset", defaults.offset, 0)):
         value = request.get(key, default)
@@ -54,6 +56,7 @@ def request_args(request, defaults):
                 "reachable": ("node",), "path": ("source", "target"), "triage": ("node",),
                 "explain": ("source", "target", "edge"), "ranked-paths": ("source", "target")}.get(mode, ())
     if mode == "gpo-scope": required = ("node",)
+    if mode == "handoff": required = ("node",)
     if mode == "trust-path": required = ("source", "target")
     if any(not request.get(key) for key in required):
         raise ValueError(f"{mode} requires: {', '.join(required)}")
@@ -62,10 +65,15 @@ def request_args(request, defaults):
                "path": {"source", "target"}, "reachable": {"node"},
                "members": {"node"}, "users": set(), "catalog": set(), "objects": set(),
                "triage": {"node"}, "routes": {"target"}, "explain": {"source", "target"},
-               "ranked-paths": {"source", "target"}, "gpo-scope": {"node"}, "trust-path": {"source", "target"}}[mode]
+               "ranked-paths": {"source", "target"}, "gpo-scope": {"node"}, "trust-path": {"source", "target"}, "handoff": {"node", "query"}}[mode]
     if (set(request) & {"node", "source", "target", "query", "principal"}) - allowed:
         raise ValueError(f"Fields do not apply to mode {mode}")
-    if mode == "gpo-scope":
+    if mode == "handoff":
+        args.handoff, args.lead_query = request["node"], request.get("query", "all")
+        args.lead_index = request.get("lead_index", 0)
+        if type(args.lead_index) is not int or args.lead_index < 0:
+            raise ValueError("lead_index must be nonnegative")
+    elif mode == "gpo-scope":
         args.gpo_scope = request["node"]
     elif mode == "trust-path":
         args.trust_path = [request["source"], request["target"]]

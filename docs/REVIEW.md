@@ -89,7 +89,7 @@ New coverage includes input ordering, sequential reloads, colliding identities,
 SID lookups, ZIP/BOM handling, malformed JSON, session direction, primary groups,
 hop boundaries, 1,200-node paths, work budgets, JSON schemas, errors, and files.
 
-Validation result: 107 checks passed, consisting of 98 unittest cases and nine
+Validation result: 116 checks passed, consisting of 107 unittest cases and nine
 existing function-style checks run through `unittest.FunctionTestCase`.
 Compilation and `git diff --check` also passed. Pytest could not be installed
 because package-index network access was unavailable.
@@ -99,3 +99,5 @@ NetworkX 3.7 ranked paths were tested here, including alternate ordering, parall
 GPO scope and directional trust interpretation now have dedicated positive/negative tests, including explicit conditional profile isolation, receiver-side filtering, legacy trust enums, GPOChanges import, batch queries and file-to-CLI integration. No live resultant-policy or resource-authorization check was performed.
 
 Batch lifecycle/client tests run real subprocesses for process reuse, correlation, query-error recovery, event callbacks, clean shutdown, startup failure and response timeout. Runtime-side WSL process-tree cleanup and HARP event-log persistence remain HARP integration responsibilities. See [the handoff](HARP_BATCH_HANDOFF.md).
+
+Whippet 0.8 adds sanitized assessment-workflow regressions for useful triage followed by an empty goal query, full one-lead handoffs, scoped live evidence, denied access, epoch invalidation, and rejection of model overlay claims. A synthetic handoff also survived the existing HARP compactor at its 3,000-character budget with proof and assessment intact. No HARP source was changed and no live target check was executed.

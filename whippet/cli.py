@@ -99,6 +99,9 @@ Examples:
     mode.add_argument("--batch", action="store_true", help="Load once; accept JSON requests on stdin")
     parser.add_argument("--batch-ready", action="store_true",
         help="With --batch, emit a readiness handshake after loading the graph")
+    mode.add_argument("--handoff", metavar="PRINCIPAL", help="One complete lead with evidence and next live verification question")
+    parser.add_argument("--lead-query", default="all", choices=["all", *QUERY_CATALOG], help="Findings category for --handoff")
+    parser.add_argument("--lead-index", type=int, default=0, help="Index in the handoff lead selection")
     mode.add_argument("--gpo-scope", metavar="GPO", help="GPO descendant scope, blocks, enforcement and remaining application checks")
     mode.add_argument("--trust-path", nargs=2, metavar=("SOURCE_DOMAIN", "TARGET_DOMAIN"), help="Directional authentication relationship path, not a compromise path")
     mode.add_argument("--triage", metavar="PRINCIPAL", help="Grouped HTB leads, effective groups and supported routes as JSON")
@@ -164,29 +167,31 @@ def main(argv: list[str] | None = None):
 
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.lead_index < 0 or ((args.lead_query != "all" or args.lead_index) and not args.handoff):
+        parser.error("Nonnegative --lead-index and --lead-query apply to --handoff only")
     if args.batch_ready and not args.batch:
         parser.error("--batch-ready requires --batch")
     if args.hops < 0 or args.max_paths < 1 or args.limit < 1 or args.offset < 0:
         parser.error("--hops must be nonnegative; --max-paths and --limit must be positive")
-    if args.summary or args.node or args.search is not None or args.findings or args.memberships or args.catalog or args.batch or args.objects or args.triage or args.routes or args.explain or args.k_shortest is not None or args.gpo_scope or args.trust_path:
+    if args.summary or args.node or args.search is not None or args.findings or args.memberships or args.catalog or args.batch or args.objects or args.triage or args.routes or args.explain or args.k_shortest is not None or args.gpo_scope or args.trust_path or args.handoff:
         args.format = "json"
     if args.serve and args.format == "json":
         parser.error("JSON queries cannot be combined with --serve")
-    if sum(bool(v) for v in (args.summary, args.node, args.search is not None, args.findings, args.memberships, args.catalog, args.batch, args.objects, args.triage, args.routes, args.explain, args.k_shortest is not None, args.gpo_scope, args.trust_path,
+    if sum(bool(v) for v in (args.summary, args.node, args.search is not None, args.findings, args.memberships, args.catalog, args.batch, args.objects, args.triage, args.routes, args.explain, args.k_shortest is not None, args.gpo_scope, args.trust_path, args.handoff,
                             args.reachable, args.transitive_members, args.list_users)) > 1 and args.format == "json":
         parser.error("Select one JSON query mode per invocation")
     if args.all_paths and not (args.src and args.dst and args.format == "json"):
         parser.error("--all-paths requires --format json --from and --to")
     if args.all_paths and (args.summary or args.node or args.search is not None
                           or args.reachable or args.transitive_members or args.list_users
-                          or args.catalog or args.findings or args.memberships or args.objects or args.triage or args.routes or args.explain or args.k_shortest or args.gpo_scope or args.trust_path):
+                          or args.catalog or args.findings or args.memberships or args.objects or args.triage or args.routes or args.explain or args.k_shortest or args.gpo_scope or args.trust_path or args.handoff):
         parser.error("--all-paths cannot be combined with another query mode")
     if (args.user_flags or args.enabled_only) and not args.list_users:
         parser.error("User filters require --list-users")
     if args.principal and not args.findings:
         parser.error("--principal requires --findings")
     if args.format == "json" and (args.src or args.dst) and any((args.node, args.search is not None,
-            args.findings, args.memberships, args.catalog, args.objects, args.reachable, args.triage, args.explain, args.gpo_scope, args.trust_path,
+            args.findings, args.memberships, args.catalog, args.objects, args.reachable, args.triage, args.explain, args.gpo_scope, args.trust_path, args.handoff, args.handoff,
             args.transitive_members, args.list_users)):
         parser.error("--from and --to apply only to summary or path/reach queries")
     if (args.where or args.select != ["name"]) and not args.objects:

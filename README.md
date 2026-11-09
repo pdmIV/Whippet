@@ -48,6 +48,19 @@ SID-history steps with evidence. Default supported routes keep these separate
 from ordinary collected privilege edges. See the [GPO and trust guide](docs/POLICY_TRUST.md)
 for field semantics, prerequisites, batch requests, and remaining RSoP limits.
 
+## Evidence-aware AD handoffs
+
+Whippet 0.8 distinguishes graph possibilities from live access, explains empty
+route scope without discarding triage leads, and returns one complete lead:
+
+```bash
+whippet capture.zip --handoff 'ACTOR@LAB.HTB' --lead-query acl-control
+```
+
+See [AD assessment evidence and handoffs](docs/AD_ASSESSMENT_HANDOFF.md) for the
+sanitized Forest case study, next verification questions, and the session-local
+trusted-host overlay prototype. Model-facing queries cannot assert verified access.
+
 ## HARP integration
 
 For integration in another Codex chat, start with the complete

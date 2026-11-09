@@ -4,6 +4,7 @@ from collections import deque
 from .graph import ADGraph
 from .policy import PolicyAnalyzer
 from .trusts import TrustAnalyzer
+from .access import assess, SessionOverlay
 
 
 CONTEXT_EDGES = {"GetChanges", "GetChangesAll", "GetChangesInFilteredSet",
@@ -47,6 +48,8 @@ class AnalysisEngine:
         self._potential_projection = None
         self.policy = PolicyAnalyzer(graph)
         self.trusts = TrustAnalyzer(graph)
+        self.overlay = SessionOverlay()
+        self.triage_context = {}
 
     def require_node(self, node):
         node = self.g.resolve(node)
@@ -206,6 +209,7 @@ class AnalysisEngine:
                 if props.get(flag) is True:
                     rows.append({"query": category, "subject": name, "evidence": {flag: True, "enabled": True}})
         if query in account_queries:
+            for row in rows: row["assessment"] = assess(row, principal)
             return rows
         if query in ("all", "trusts"):
             domains = None
@@ -267,10 +271,14 @@ class AnalysisEngine:
                     rows.append({"query": "adcs", "source": src, "target": dst, "type": kind,
                                  "status": "collected-permission", "membership_path": scope_paths.get(src),
                                  "prerequisites": ["Permission alone does not establish an ESC condition; evaluate template and CA configuration with Certipy."]})
+        for row in rows:
+            row["assessment"] = assess(row, principal)
         return sorted(rows, key=lambda r: (r["query"], r.get("subject", r.get("source", "")), r.get("target", ""), r.get("type", "")))
 
     def coverage(self):
         return {"profile": "supported-ad-v1", "full_bloodhound_parity": False,
+                "access_semantics": "Graph possibility, never verified access; use handoff for one lead and next verification question",
+                "live_overlay": "Session-local trusted Python API only; model-facing updates are rejected",
                 "object_queries": "Exact typed property filters with selected property output",
                 "derived_rules": ["DCSync: GetChanges + GetChangesAll, including nested membership"],
                 "excluded_route_edges": sorted(CONTEXT_EDGES),

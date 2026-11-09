@@ -42,9 +42,58 @@ def explain(analysis, source, target, kind):
     if (target, kind) not in analysis.g.neighbors(source) and (target, kind) not in analysis.potential_projection.neighbors(source):
         raise ValueError("No collected or derived relationship matches that source, target and type")
     meaning, prerequisites = GUIDANCE.get(kind, ("Collected relationship", ["Verify this relationship's target-specific prerequisites."]))
+    from .access import assess
     return {**analysis.edge(source, target, kind), "meaning": meaning,
             "prerequisites": prerequisites, "verified_access": False,
+            "assessment": assess({"type": kind, "prerequisites": prerequisites}),
             "reference": "https://bloodhound.specterops.io/resources/edges"}
+
+
+def handoff(analysis, principal, query="all", index=0, auth_context=None):
+    """One complete lead; detailed inventory stays in focused query APIs."""
+    principal = analysis.require_node(principal)
+    if type(index) is not int or index < 0:
+        raise ValueError("lead index must be nonnegative")
+    rows = analysis.findings(query, principal)
+    priority = {"dcsync": 0, "acl-control": 1, "gmsa": 2, "laps": 3, "remote-access": 4}
+    rows.sort(key=lambda r: (priority.get(r["query"], 10), r.get("source", ""), r.get("target", ""), r.get("type", "")))
+    # A category may describe the same edge twice; select each fact only once.
+    unique, seen = [], set()
+    for row in rows:
+        key = (row.get("source"), row.get("target"), row.get("type"), row.get("subject"),
+               row.get("category"), row["query"] if not row.get("type") else None)
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+    lead = unique[index] if index < len(unique) else None
+    if lead:
+        import copy
+        lead = copy.deepcopy(lead)
+    if lead and auth_context and lead.get("target") and lead.get("type"):
+        lead["assessment"]["live_access"] = analysis.overlay.access(principal, lead["target"], lead["type"], auth_context)
+    assessment = lead.pop("assessment") if lead else {"live_access": {"status": "unverified"},
+        "next_verification": {"question": "Select a valid lead index or focused category; check capture coverage if no matching leads exist"}}
+    return {"principal": principal, "lead": lead, "lead_index": index, "total_leads": len(unique),
+            "assessment": assessment,
+            "next_lead_index": index + 1 if index + 1 < len(unique) else None,
+            "coverage": {k: analysis.coverage()[k] for k in ("profile", "full_bloodhound_parity", "excluded_route_edges", "unsupported_analysis")}, "overlay": {"epoch": analysis.overlay.epoch, "capture_modified": False},
+            "warnings": ["One selected lead is a possibility, not permission to modify the target",
+                         "Directory changes and membership readback do not establish effective authentication context"],
+            "follow_up": {"mode": "findings", "query": lead["query"] if lead else query, "principal": principal, "limit": 1}}
+
+
+def route_diagnostic(analysis, sources, goal, hops, profile, found, avoid=()):
+    context = {s: analysis.triage_context[s] for s in sources if s in analysis.triage_context}
+    return {"status": "route-found" if found else "no-route-in-query-scope",
+            "sources": sources, "goal": goal, "hops": hops, "profile": profile, "avoid": list(avoid),
+            "source_types": {s: analysis.g.node_type(s) or "Unknown" for s in sources}, "capture_only": True,
+            "coverage": {k: analysis.coverage()[k] for k in ("profile", "full_bloodhound_parity", "excluded_route_edges", "unsupported_analysis")}, "unresolved_nodes": sum(n not in analysis.g._props for n in analysis.g._adj),
+            "goal_type": analysis.g.node_type(goal) if goal else "detected-high-value-targets",
+            "limitations": ["Capture is offline; changes since collection are not represented",
+                            "A specific goal may differ from targets of viable triage leads",
+                            "Some permission compositions and live prerequisites are not graph transitions"],
+            "prior_triage": context, "invalidates_prior_leads": False,
+            "next_query": {"mode": "handoff", "node": sources[0]} if sources else None}
 
 
 def routes(analysis, sources, target=None, hops=6, avoid=(), profile="supported"):

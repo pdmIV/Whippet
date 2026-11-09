@@ -192,3 +192,6 @@ limits of CLI parity.
 HTB-oriented triage, owned routes, edge explanations, Certipy import, and NetworkX ranked paths are documented in [the HTB guide](HTB.md).
 
 `--gpo-scope`, `--trust-path` and the opt-in `potential` routing profile are described in [the GPO/trust guide](POLICY_TRUST.md). Conditional edges must retain their evidence and prerequisites in model handoffs.
+
+
+For Whippet 0.8 lead states, empty-route diagnostics, the `handoff` mode and the trusted-host overlay boundary, see [AD assessment handoffs](AD_ASSESSMENT_HANDOFF.md). The older HARP allowlist requires a separate HARP update before it can dispatch this new mode.
