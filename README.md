@@ -1,3 +1,5 @@
+![Whippet — Lean AD Pathfinder](assets/whippet-banner.png)
+
 # Whippet
 
 **A lean, fast in-memory Active Directory graph pathfinder — the lightweight sibling to BloodHound.**
