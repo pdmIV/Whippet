@@ -1,7 +1,4 @@
 ![Whippet — Lean AD Pathfinder](assets/whippet-banner.png)
-
-# Whippet
-
 **A lean, fast in-memory Active Directory graph pathfinder — the lightweight sibling to BloodHound.**
 
 No Neo4j. No JVM. No Cypher. No kennel. Just a zero-dependency Python package that ingests the exact same SharpHound output BloodHound uses and answers the questions you actually care about — *who can reach Domain Admins, what can this account touch, how do these privileges chain* — straight from the command line on your Kali box. And when you *do* want to see the graph, an optional one-command browser visualizer is built in.
